@@ -105,3 +105,4 @@ public commit with a stated reason.
 - @demilade27 | 2026-08-02 | "lost hope but im hopeful" | id:32215629 | src:https://github.com/santifer/career-ops/discussions/2422 | n:57
 - @ahiyantra | S.S.W.(ahiyantra) | 2026-08-03 | "I wish for hiring to stop being a figurative black hole that gives no signal to most applicants." | id:45235557 | src:https://github.com/santifer/career-ops/discussions/2455 | n:58
 - @draggador | JéJé(draggador) | 2026-08-03 | "i want large companies to treat applicants like humans instead of continuing to treat them like objects" | id:87720862 | src:https://github.com/santifer/career-ops/discussions/2456 | n:59
+- @marcusblackthorn03 | R. M. B. K. | 2026-08-03 | "I could skip most of the worst parts of a job hunting process now." | id:308749780 | src:https://github.com/santifer/career-ops/discussions/2457 | n:60
