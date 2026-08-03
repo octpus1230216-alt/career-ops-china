@@ -107,3 +107,4 @@ public commit with a stated reason.
 - @draggador | JéJé(draggador) | 2026-08-03 | "i want large companies to treat applicants like humans instead of continuing to treat them like objects" | id:87720862 | src:https://github.com/santifer/career-ops/discussions/2456 | n:59
 - @marcusblackthorn03 | R. M. B. K. | 2026-08-03 | "I could skip most of the worst parts of a job hunting process now." | id:308749780 | src:https://github.com/santifer/career-ops/discussions/2457 | n:60
 - @doradoramedia | DoraDoraMedia | 2026-08-03 | "foss projects like this help ensure that our society still has hope of avoiding worst possible futures" | id:268710757 | src:https://github.com/santifer/career-ops/discussions/2458 | n:61
+- @arijit1201 | 2026-08-03 | "I want to make the process of job-searching a worthwhile experience instead of feeling like a grueling Herculean labour." | id:36472612 | src:https://github.com/santifer/career-ops/discussions/2462 | n:62
