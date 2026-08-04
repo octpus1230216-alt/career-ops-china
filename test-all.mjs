@@ -109,8 +109,16 @@ async function runDiscovered(filter = null) {
     // process.exit() inside one would terminate test-all mid-run with a forged
     // exit code — every later section (and finish()) would silently never run.
     // Refuse to import such a suite and fail loudly instead (#1916 regression).
-    if (/\bprocess\.exit\s*\(/.test(readFileSync(f, 'utf-8'))) {
+    const src = readFileSync(f, 'utf-8');
+    if (/\bprocess\.exit\s*\(/.test(src)) {
       fail(`${f.slice(ROOT.length + 1)} calls process.exit() — discovered suites must use pass/fail from tests/helpers.mjs and never exit`);
+      continue;
+    }
+    // finish() prints the global summary and exits — inside a discovered suite
+    // it forges the verdict line and decapitates every suite sorting after it,
+    // sailing past the process.exit() check above (the exit lives in helpers).
+    if (/\bfinish\s*\(\s*\)/.test(src)) {
+      fail(`${f.slice(ROOT.length + 1)} calls finish() — only test-all.mjs may print the global summary; discovered suites use pass/fail and return`);
       continue;
     }
     await import(pathToFileURL(f).href);
