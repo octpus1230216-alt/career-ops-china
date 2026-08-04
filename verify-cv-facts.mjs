@@ -37,8 +37,27 @@ const METRIC_NOUNS = [
   'servers', 'guides', 'articles', 'datasets', 'examples', 'deployments',
   'services', 'downloads', 'stars', 'lines', 'projects', 'integrations', 'tests',
 ];
+// How many words may sit between a number and the noun it counts. The same
+// regex parses the generated CV and the sources, so the window is symmetric by
+// construction — but a window still decides WHETHER a claim exists, and the CV
+// and its source rarely word a fact identically. At {0,2}, "~5 live Cloud Run
+// deployments" (three modifiers) yielded no claim while the paraphrase
+// "~5 Cloud Run deployments" (two) did, which broke the gate in both
+// directions (#2279):
+//
+//   - a truthful CV failed, because the claim existed on the CV side only;
+//   - a CHANGED number passed, because a 3-modifier phrasing on the CV side
+//     produced no claim to compare — and catching invented numbers is the
+//     entire point of this script.
+//
+// Four covers the phrasings seen in real CVs ("live Cloud Run deployments",
+// "active monthly paying customers"). Widening cannot hide an invented number:
+// it only ever extracts MORE claims, on both sides. A number is a hard barrier
+// for the chain — modifiers are alphabetic only — so a wider window still
+// cannot jump across an intervening figure to bind an unrelated noun.
+const MODIFIER_WINDOW = 4;
 const COUNT_CLAIM_RE = new RegExp(
-  String.raw`\b(\d[\d,.]*)\s*\+?\s*(?:[A-Za-z][A-Za-z-]*\s+){0,2}(${METRIC_NOUNS.join('|')})\b`,
+  String.raw`\b(\d[\d,.]*)\s*\+?\s*(?:[A-Za-z][A-Za-z-]*\s+){0,${MODIFIER_WINDOW}}(${METRIC_NOUNS.join('|')})\b`,
   'gi'
 );
 const NOUN_SYNONYMS = new Map([
@@ -410,6 +429,52 @@ function runSelfTest() {
   equal('an eight-digit multi-group number folds too', auditClaims('Reached 12 345 678 users', 'Reached 12345678 active users.').invented, []);
   // A four-digit left part is a year, not a group: nothing is joined.
   equal('a year is not glued to the next number', auditClaims('Joined in 2026 100 users', foldSource).invented, ['100 users']);
+
+  // #2279 — the modifier count must never decide whether a claim exists. The
+  // source words the fact with three modifiers, the CV with two: at the old
+  // {0,2} window the claim was extracted from the CV side only, and a true
+  // statement failed the gate.
+  const modifierSource = 'Consolidated 25+ services down to ~5 live Cloud Run deployments.';
+  equal(
+    'same number, fewer modifiers in the CV',
+    auditClaims('25+ services consolidated to ~5 Cloud Run deployments', modifierSource).invented,
+    []
+  );
+  equal(
+    'same number, more modifiers in the CV',
+    auditClaims('Consolidated to ~5 live production Cloud Run deployments', modifierSource).invented,
+    []
+  );
+  // The direction that matters: a CHANGED number hid behind the 3-modifier
+  // phrasing, because the CV side yielded no claim to compare at all.
+  equal(
+    'changed number behind three modifiers is caught',
+    auditClaims('Consolidated to ~9 live Cloud Run deployments', modifierSource).invented,
+    ['9 deployments']
+  );
+  equal(
+    'changed number with the plain phrasing is still caught',
+    auditClaims('Consolidated to ~9 Cloud Run deployments', modifierSource).invented,
+    ['9 deployments']
+  );
+  // A wider window must not let the chain jump over an intervening figure to
+  // bind a number to a noun it does not count. The source states the two facts
+  // in SEPARATE sentences on purpose: with identical text on both sides, a
+  // wrong "7 hours" extraction would appear on both and cancel itself out, so
+  // the assertion would pass while proving nothing. Both nouns are metric
+  // nouns, so each real claim is independently evidenced and the only thing
+  // that can surface as invented is a cross-number binding.
+  const numericBarrierSource = 'Ran 7 tests. Logged 40 hours.';
+  equal(
+    'a figure still blocks the chain',
+    auditClaims('Ran 7 tests over 40 hours', numericBarrierSource).invented,
+    []
+  );
+  equal(
+    'no cross-number binding invents evidence',
+    auditClaims('Shipped 3 integrations', 'Shipped 3 features across 12 integrations').invented,
+    ['3 integrations']
+  );
 
   console.log(`verify-cv-facts self-test: ${passed} passed, ${failed} failed`);
   return failed ? 1 : 0;
