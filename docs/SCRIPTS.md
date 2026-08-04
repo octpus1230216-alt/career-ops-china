@@ -50,6 +50,7 @@ All scripts live in the project root as `.mjs` modules. Most are exposed via
 | `npm run archive` | `archive-posting.mjs` | Save a live job posting as PDF before it disappears |
 | `npm run prepare:application` | `prepare-application.mjs` | Print an ATS prefill summary (read-only, never POSTs) |
 | `npm run build:dashboard` | `build-dashboard.mjs` | Build the Go TUI dashboard binary cross-platform |
+| `node upgrade-tests.mjs --pr-gate` | `upgrade-tests.mjs` | Upgrade an install seeded from the newest old release to this commit and prove user data survived (CI gate; `--canary` proves the gate can fail) |
 
 ---
 
@@ -136,6 +137,49 @@ node validate-portals.mjs --self-test
 ```
 
 **Exit codes:** `0` no errors (warnings allowed), `1` one or more errors found.
+
+---
+
+## upgrade-tests
+
+The dynamic upgrade regression harness (#2358). `update-system.mjs` has the
+largest blast radius in the repo — it rewrites system files in place on someone
+else's install — and this is the only test that exercises a *real* upgrade
+against a seeded user install instead of asserting on the updater's source.
+
+It is hermetic: a temporary `GIT_CONFIG_GLOBAL` rewrites the canonical GitHub
+URL to a local bare mirror whose `main` ref is forced to the commit under test,
+so no leg ever reaches the network. The old install runs its own `apply`, which
+self-reexecs into the target updater — so the migration code being tested is the
+one the PR ships, not the one already installed.
+
+Two modes:
+
+```bash
+node upgrade-tests.mjs --pr-gate    # newest release tag that is an ancestor of HEAD -> this commit
+node upgrade-tests.mjs --canary     # plant a user-file clobber; the harness MUST report it
+```
+
+`--pr-gate` picks the newest release tag that is an ancestor of `HEAD`, seeds an
+install from that era's fixture state, and upgrades it to the commit under
+review. The leg is red unless all of it holds: `apply` exits 0; a system file
+that genuinely changed between the two revisions now carries the target's blob
+(the non-vacuity oracle — VERSION is never used, since `apply` has no version
+gate); every user file is byte-identical; every path the new manifest adds is
+present; `data/applications.md` still parses with the expected row and status
+counts; `data/salary-observations.tsv` still parses; and `doctor.mjs --json`
+reports `onboardingNeeded: false`. It needs the release tags, which is why CI
+checks out with `fetch-depth: 0`.
+
+`--canary` exists because a gate never seen red proves nothing. It commits a
+poisoned mirror — `cv.md` tracked and added to `SYSTEM_PATHS`, so the old
+updater checks it out over the user's CV — and then requires the harness to
+report that clobber. A canary that comes back green means the harness detected
+the planted damage; a red canary means the gate is incapable of failing and its
+green runs are worthless.
+
+Both modes run on every PR, as the `upgrade-gate` job in
+`.github/workflows/test.yml`.
 
 ---
 
