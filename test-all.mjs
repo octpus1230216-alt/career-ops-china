@@ -5108,6 +5108,7 @@ try {
     buildPostedDateFilter,
     resolveEffectiveAfter,
     resolveEarlyStopMs,
+    parseSinceDays,
     buildVisaFilter,
     buildCountryEligibilityFilter,
     shouldDedupScanHistoryRow,
@@ -5192,6 +5193,50 @@ try {
     pass('--since resolves to an absolute lower bound; the newest active bound wins');
   } else {
     fail('effective posted-after bound is not the newest of --posted-after and --since');
+  }
+
+  // ── --since means the SAME thing in both scanners (#2498) ──────────────
+  // scan-ats-full.mjs parsed it as `Number(valueOf('--since')) || 3`, which
+  // swallowed every malformed operand: `abc`/`0` silently became 3 (the user
+  // believes they scanned the window they typed), `-5` produced a cutoff in the
+  // FUTURE so nothing was ever eligible (reads exactly like "no new postings"),
+  // and `1e400` became Infinity → an -Infinity cutoff, i.e. no window at all.
+  // Both CLIs now share parseSinceDays, so the flag cannot mean two things.
+  {
+    const bad = [
+      [['--since', 'abc'], 'a non-numeric operand'],
+      [['--since', '-5'], 'a negative day count'],
+      [['--since', '0'], 'a zero day count'],
+      [['--since', '1e400'], 'Infinity'],
+      [['--since', '1e300'], 'a count outside the representable Date range'],
+      [['--since'], 'a missing operand'],
+      [['--since', '--posted-after', '2026-01-01'], 'an operand that is really the next flag'],
+      [['--since=7', '--since'], 'duplicate occurrences'],
+    ];
+    const leaked = bad.filter(([args]) => parseSinceDays(args).error === null);
+    if (leaked.length === 0) {
+      pass('parseSinceDays rejects every malformed --since operand instead of coercing it (#2498)');
+    } else {
+      fail(`parseSinceDays accepted malformed --since: ${JSON.stringify(leaked.map(([a]) => a))}`);
+    }
+    const good =
+      parseSinceDays(['--since', '7']).days === 7 &&
+      parseSinceDays(['--since=7']).days === 7 &&
+      // Absent is NOT an error — the default is the caller's to choose
+      // (scan.mjs: no bound; scan-ats-full.mjs: 3 days).
+      parseSinceDays([]).days === null && parseSinceDays([]).error === null;
+    if (good) {
+      pass('parseSinceDays accepts both spellings and leaves the default to the caller (#2498)');
+    } else {
+      fail('parseSinceDays mishandled a valid --since or the absent case');
+    }
+    // Source-level: neither scanner may re-introduce a private coercion.
+    const atsSrc = readFileSync(join(ROOT, 'scan-ats-full.mjs'), 'utf-8');
+    if (/parseSinceDays\(/.test(atsSrc) && !/Number\(valueOf\('--since'\)\)/.test(atsSrc)) {
+      pass('scan-ats-full.mjs derives --since from the shared parser, not its own Number() coercion (#2498)');
+    } else {
+      fail('scan-ats-full.mjs parses --since itself again — the two scanners can disagree (#2498)');
+    }
   }
 
   if (
