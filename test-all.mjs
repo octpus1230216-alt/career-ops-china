@@ -32,6 +32,7 @@ import { promisify } from 'util';
 import { fileURLToPath, pathToFileURL } from 'url';
 import yaml from 'js-yaml';
 import { pass, fail, warn, run, formatRunFailure, fileExists, finish, ROOT, QUICK, NODE, getBash, toBashPath } from './tests/helpers.mjs';
+import { flagValue, hasFlag } from './lib/cli-flags.mjs';
 
 /**
  * Read a repo-relative text file as UTF-8.
@@ -116,8 +117,15 @@ async function runDiscovered(filter = null) {
   }
 }
 
-const onlyIdx = process.argv.indexOf('--only');
-const ONLY = onlyIdx !== -1 ? (process.argv[onlyIdx + 1] ?? '') : null;
+// `--only=providers/x` must not read as "no filter": the discovered-test
+// runner exits 1 when a filter matches nothing, precisely so a path typo can
+// never turn CI green — and a silently dropped filter runs the whole suite
+// instead, which looks like a pass of the subset that was asked for.
+// `--only` supplied without a value must stay a usage error, not fall through
+// to "no filter": that would run everything and read as a pass of the subset
+// that was asked for — the same silent substitution this file's flag reading
+// was fixed for.
+const ONLY = hasFlag(process.argv, '--only') ? (flagValue(process.argv, '--only') ?? '') : null;
 if (ONLY !== null) {
   if (ONLY === '' || ONLY.startsWith('--')) {
     console.log('  ❌ --only requires a path substring, e.g. --only providers/themuse');
