@@ -5045,6 +5045,8 @@ try {
     buildContentFilter,
     buildPostingAgeFilter,
     buildPostedDateFilter,
+    resolveEffectiveAfter,
+    resolveEarlyStopMs,
     buildVisaFilter,
     buildCountryEligibilityFilter,
     shouldDedupScanHistoryRow,
@@ -5101,6 +5103,153 @@ try {
     pass('posted-date filter gates on an absolute after/before window; missing dates always pass');
   } else {
     fail('posted-date filter did not gate on absolute posted-date bounds correctly');
+  }
+
+  // ── --since as a lower bound, and the early-stop floor derived from it ──
+  // The invariant: the early-stop floor must never be NEWER than the oldest
+  // posting the filters still accept, or pagination stops with eligible
+  // postings unfetched.
+  const SINCE_NOW = Date.parse('2026-08-01T00:00:00Z');
+  const SINCE_DAY = 86_400_000;
+  if (
+    resolveEffectiveAfter(null, null, SINCE_NOW) === null && // neither bound → no filtering
+    resolveEffectiveAfter('2026-07-01', null, SINCE_NOW) === '2026-07-01' && // --posted-after alone
+    resolveEffectiveAfter(null, 7, SINCE_NOW) === '2026-07-25' && // --since alone, relative to now
+    // Both set: bounds AND, so the NEWER one decides. This is the case that
+    // silently dropped eligible postings when --since was hint-only — the hint
+    // stopped at Jul 25 while the filter still accepted back to Jul 1.
+    resolveEffectiveAfter('2026-07-01', 7, SINCE_NOW) === '2026-07-25' &&
+    resolveEffectiveAfter('2026-07-30', 7, SINCE_NOW) === '2026-07-30' && // absolute newer than relative
+    resolveEffectiveAfter(null, 0, SINCE_NOW) === null && // invalid day counts contribute nothing
+    resolveEffectiveAfter(null, Number.POSITIVE_INFINITY, SINCE_NOW) === null &&
+    // Finite and positive is not sufficient: a day count this large pushes the
+    // cutoff outside the representable Date range, where toISOString() throws.
+    // The helper is exported, so it must return rather than raise.
+    resolveEffectiveAfter(null, 1e300, SINCE_NOW) === null &&
+    resolveEffectiveAfter('2026-07-01', 1e300, SINCE_NOW) === '2026-07-01'
+  ) {
+    pass('--since resolves to an absolute lower bound; the newest active bound wins');
+  } else {
+    fail('effective posted-after bound is not the newest of --posted-after and --since');
+  }
+
+  if (
+    resolveEarlyStopMs(null, null, SINCE_NOW) === null && // no CLI window → early stop disabled
+    resolveEarlyStopMs(null, 30, SINCE_NOW) === null && // config alone must not enable it
+    resolveEarlyStopMs('2026-07-25', null, SINCE_NOW) === Date.parse('2026-07-25T00:00:00Z') &&
+    // max_posting_age_days is the newer bound here (Jul 27 vs Jul 25), so it
+    // decides — stopping at Jul 25 would page deeper than eligibility requires,
+    // which is merely wasteful; stopping NEWER than the filter would be a bug.
+    resolveEarlyStopMs('2026-07-25', 5, SINCE_NOW) === SINCE_NOW - 5 * SINCE_DAY &&
+    // ...and when the CLI window is the newer bound, it wins.
+    resolveEarlyStopMs('2026-07-25', 60, SINCE_NOW) === Date.parse('2026-07-25T00:00:00Z') &&
+    resolveEarlyStopMs('2026-07-25', 0, SINCE_NOW) === Date.parse('2026-07-25T00:00:00Z') && // invalid config ignored
+    resolveEarlyStopMs('2026-07-25', 'abc', SINCE_NOW) === Date.parse('2026-07-25T00:00:00Z')
+  ) {
+    pass('early-stop floor is the newest active lower bound, and stays off without a CLI window');
+  } else {
+    fail('early-stop floor is not derived from every active lower bound');
+  }
+
+  // The contract, stated as one assertion: for a range of bound combinations,
+  // nothing the early-stop skips would have survived the filter anyway.
+  {
+    const cases = [
+      { after: null, since: 7, maxAge: null },
+      { after: '2026-07-01', since: 7, maxAge: null },
+      { after: '2026-07-01', since: null, maxAge: 30 },
+      { after: '2026-07-20', since: 3, maxAge: 10 },
+      { after: null, since: 14, maxAge: 5 },
+    ];
+    const violations = cases.filter(({ after, since, maxAge }) => {
+      const eff = resolveEffectiveAfter(after, since, SINCE_NOW);
+      const floor = resolveEarlyStopMs(eff, maxAge, SINCE_NOW);
+      if (floor === null) return false;
+      const dateOk = buildPostedDateFilter(eff, null);
+      const ageOk = buildPostingAgeFilter(maxAge, SINCE_NOW);
+      // One second older than the floor: the first posting pagination would
+      // skip. It must already be ineligible.
+      const justOutside = floor - 1000;
+      return dateOk(justOutside) && ageOk(justOutside);
+    });
+    if (violations.length === 0) {
+      pass('early stop never skips a dated posting the filters would have accepted');
+    } else {
+      fail(`early stop would skip eligible postings for: ${JSON.stringify(violations)}`);
+    }
+  }
+
+  // The contract above holds for dated postings only. Undated ones pass every
+  // date filter, so the early stop CAN narrow results — pinned here so the
+  // behaviour and modes/scan.md can't drift apart. Change this test only
+  // alongside the doc.
+  {
+    const { pageIsPastWindow } = await import(pathToFileURL(join(ROOT, 'providers', 'workday.mjs')).href);
+    const floor = SINCE_NOW - 7 * SINCE_DAY;
+    const stale = floor - 30 * SINCE_DAY; // well past the 2-day jitter margin
+    const fresh = SINCE_NOW - SINCE_DAY;
+    const undated = { postedAt: undefined };
+
+    if (
+      // No window → the hint is inert, whatever the page holds.
+      pageIsPastWindow([{ postedAt: stale }], null) === false &&
+      // Tenants like adventhealth: no dates anywhere. Protected — this is what
+      // scan.mjs's includeUndated:true keeps alive downstream.
+      pageIsPastWindow([undated, undated], floor) === false &&
+      // A fresh dated posting holds pagination open.
+      pageIsPastWindow([{ postedAt: fresh }, undated], floor) === false &&
+      // KNOWN LIMITATION: the dated postings are stale, the undated ones are
+      // eligible, and pagination stops anyway. Undated postings on later pages
+      // are lost. Fixing it lives in workday.mjs and costs the optimisation on
+      // every mixed tenant.
+      pageIsPastWindow([{ postedAt: stale }, undated], floor) === true
+    ) {
+      pass('early stop ignores undated postings — all-undated pages are safe, mixed pages are not');
+    } else {
+      fail('workday early-stop no longer matches the undated-posting behaviour documented in modes/scan.md');
+    }
+  }
+
+  // The assertions above exercise the resolver in-process. --since is rejected
+  // earlier than that, in main()'s argv parsing, so nothing above would catch a
+  // regression there — hence the real binary. Each case fails before scan.mjs
+  // loads config or opens a socket, so these stay offline and quick.
+  //
+  // stderr is matched, not just the exit code: every one of these paths exits 1,
+  // and so would an unrelated startup failure. The message is what proves the
+  // flag was read and refused.
+  {
+    const sinceCli = (...argv) => spawnSync(NODE, [join(ROOT, 'scan.mjs'), ...argv], {
+      cwd: ROOT,
+      encoding: 'utf-8',
+      timeout: 30000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const NO_VALUE = '--since expects a positive number of days, got (no value)';
+    const sinceCases = [
+      { argv: ['--since'], want: NO_VALUE, why: 'flag with no operand' },
+      { argv: ['--since='], want: NO_VALUE, why: 'empty inline operand' },
+      // The next token is a flag, not a value. Consuming it would scan the full
+      // window while looking like it had honoured --since.
+      { argv: ['--since', '--posted-after', '2026-07-01'], want: NO_VALUE, why: 'operand stealing' },
+      { argv: ['--since', '0'], want: 'got "0"', why: 'zero days' },
+      { argv: ['--since', '-3'], want: 'got "-3"', why: 'negative days' },
+      // Passes a bare `> 0` test; only Number.isFinite rejects it.
+      { argv: ['--since', 'Infinity'], want: 'got "Infinity"', why: 'non-finite' },
+      // Finite and positive, but the derived cutoff is outside Date's range.
+      { argv: ['--since', '1e300'], want: 'is too large to express as a date', why: 'out-of-range cutoff' },
+      // Reading only the first occurrence would let this one through.
+      { argv: ['--since=7', '--since'], want: '--since given 2 times; pass it once', why: 'repeated flag' },
+    ];
+    const badCases = sinceCases.filter(({ argv, want }) => {
+      const r = sinceCli(...argv);
+      return r.status !== 1 || !String(r.stderr).includes(want);
+    });
+    if (badCases.length === 0) {
+      pass('scan.mjs --since rejects bad input at the CLI (exit 1, with the reason named)');
+    } else {
+      fail(`scan.mjs --since accepted or misreported: ${badCases.map((c) => c.why).join(', ')}`);
+    }
   }
 
   const filter = buildLocationFilter({
