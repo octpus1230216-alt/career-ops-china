@@ -64,6 +64,44 @@ function checkNodeVersion() {
   };
 }
 
+// El check mas frecuente de la comunidad, medido: 8 personas en 4 semanas
+// preguntando por cuota y coste, y la causa mas repetida es esta. Aviso, nunca
+// fallo: tener una clave puesta es una eleccion legitima, lo que no es legitimo
+// es que el usuario no sepa que la esta usando en vez del plan que ya paga.
+function checkBillingSource() {
+  const key = process.env.ANTHROPIC_API_KEY;
+  const authToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  const cloud = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']
+    .filter((v) => process.env[v]);
+
+  if (cloud.length) {
+    return {
+      warn: true,
+      label: `${cloud[0]} is set, so requests bill to your cloud account, not to a Claude subscription.`,
+      fix: [
+        'Intentional? Nothing to do.',
+        `Not intentional: unset ${cloud[0]} and restart your terminal.`,
+      ],
+    };
+  }
+
+  const which = key ? 'ANTHROPIC_API_KEY' : (authToken ? 'ANTHROPIC_AUTH_TOKEN' : null);
+  if (!which) {
+    return { pass: true, label: 'Billing source: no API key in the environment (a Claude subscription will be used if you are logged in)' };
+  }
+
+  return {
+    warn: true,
+    label: `${which} is set, so it takes precedence over any Claude subscription: this session bills per token even if you pay for Pro or Max.`,
+    fix: [
+      'Intentional (you meant to use API credits)? Nothing to do.',
+      `Not intentional: remove the export of ${which} from ~/.zshrc, ~/.bashrc, ~/.profile or a project .env, restart your terminal, and run /login.`,
+      'Batch runs are the exception: `claude -p` workers do not use the interactive login, so they need `claude setup-token` exported as CLAUDE_CODE_OAUTH_TOKEN.',
+      'Details: docs/RUNNING_ON_A_BUDGET.md section 2b.',
+    ],
+  };
+}
+
 function checkDependencies() {
   if (existsSync(join(projectRoot, 'node_modules'))) {
     return { pass: true, label: 'Dependencies installed' };
@@ -404,6 +442,7 @@ async function main() {
 
   const checks = [
     checkNodeVersion(),
+    checkBillingSource(),
     checkDependencies(),
     await checkPlaywright(),
     checkPlaywrightMcp(projectRoot, activeCli),
