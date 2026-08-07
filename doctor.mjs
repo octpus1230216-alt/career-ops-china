@@ -71,8 +71,16 @@ function checkNodeVersion() {
 function checkBillingSource() {
   const key = process.env.ANTHROPIC_API_KEY;
   const authToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  // Enabled means SET TO A TRUTHY VALUE, not merely present. These switches are
+  // documented as `=1`, so `CLAUDE_CODE_USE_BEDROCK=0` is how someone turns one
+  // off — and mere presence would then report "requests bill to your cloud
+  // account" at exactly the user who just said they don't. A billing check that
+  // misreads an explicit opt-out causes the confusion it exists to remove.
+  // Matches the repo's own env-flag convention (=== '1' in merge-tracker.mjs
+  // and update-system.mjs), while also accepting `true` since these are
+  // third-party switches users copy from assorted docs.
   const cloud = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']
-    .filter((v) => process.env[v]);
+    .filter((v) => /^(1|true|yes|on)$/i.test(String(process.env[v] ?? '').trim()));
 
   if (cloud.length) {
     return {
