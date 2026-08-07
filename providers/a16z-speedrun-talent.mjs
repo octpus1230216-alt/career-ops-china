@@ -12,9 +12,10 @@ import { fetchJsonWithRetry } from './_http.mjs';
 //
 // Paginated 50/page via `?page=N` (0-indexed); the response carries
 // `total_pages`, so iteration is bounded by min(total_pages, max_pages).
-// Default cap is modest; the board is several thousand roles, so either
-// raise `max_pages` on the entry or narrow server-side with `q:` (the feed
-// runs full-text search with synonym expansion, e.g. "ml", "swe", "nyc").
+// Page budgets are sized in 50-job pages — see DEFAULT_MAX_PAGES and
+// MAX_PAGES_CAP below. Either raise `max_pages` on the entry or narrow
+// server-side with `q:` (the feed runs full-text search with synonym
+// expansion, e.g. "ml", "swe", "nyc").
 //
 // Every request carries `source=career-ops` — the feed's documented optional
 // attribution param, echoed in the response; it does not change results.
@@ -25,8 +26,14 @@ import { fetchJsonWithRetry } from './_http.mjs';
 const FEED_BASE = 'https://speedrun-talent-network.com/api/v1/jobs';
 const TRUSTED_HOST = 'speedrun-talent-network.com';
 const PER_PAGE = 50;
-const DEFAULT_MAX_PAGES = 3;
-const MAX_PAGES_CAP = 120;
+const DEFAULT_MAX_PAGES = 6; // × PER_PAGE = the 300-job default scan
+// Runaway bound, not a coverage target: iteration already stops at the
+// feed's reported total_pages (or a short page), so on an honest feed the
+// cap costs nothing and full-board sweeps keep working as the board grows.
+// It only bites a misbehaving feed or an absurd max_pages entry — so it
+// sits well above plausible board size (~353 pages / ~17.6k jobs as of
+// 2026-08), same policy as workday.mjs's cap.
+const MAX_PAGES_CAP = 1000;
 
 /** @param {string} url */
 function assertFeedUrl(url) {
