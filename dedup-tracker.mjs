@@ -304,7 +304,13 @@ console.log(`📊 ${entries.length} entries loaded`);
 // cannot drift on agency identity. An absent Via (empty or `—`) still keys to
 // '' and groups with other via-less blind rows, matching merge-tracker, whose
 // guard does not reject a pair whose Via cells are both blank.
-const BLIND_KEY = ' blind-via:';
+// The NUL prefix makes this key uncollidable with any real company name.
+// It is written as the ESCAPE, never as a raw NUL byte in the source: a raw
+// one makes grep classify this file as binary and report NO MATCH for any
+// pattern in it, silently, with the same exit code as a genuine absence.
+// Identical value at runtime, and the file stays greppable.
+// Pinned by tests/source-no-nul-bytes.test.mjs.
+const BLIND_KEY = '\u0000blind-via:';
 const groups = new Map();
 for (const entry of entries) {
   const key = String(entry.company).trim() === '?'
