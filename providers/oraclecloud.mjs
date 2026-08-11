@@ -42,7 +42,7 @@
 // User-Agent is sent to reduce (not eliminate) WAF friction.
 
 import { decodeEntities } from './_html-entities.mjs';
-import { BROWSER_LIKE_USER_AGENT } from './_http.mjs';
+import { BROWSER_LIKE_USER_AGENT, fetchJsonWithRetry } from './_http.mjs';
 
 // `oraclecloud(?:[1-9][0-9]?)?` = oraclecloud.com plus oraclecloud1.com …
 // oraclecloud99.com. No leading zero, at most two digits — a bounded family,
@@ -51,9 +51,7 @@ const ORACLE_HOST_RE = /^[a-z0-9-]+\.fa\.(?:[a-z0-9-]+\.)?(?:ocs\.)?oraclecloud(
 
 const PAGE_SIZE = 200;
 const MAX_PAGES = 25;             // safety cap (~5000 jobs); hard ceiling like workday
-const MAX_RETRIES = 3;
-const RETRY_BASE_DELAY_MS = 500;
-const RETRY_MAX_DELAY_MS = 8_000;
+const RETRY_POLICY = { retries: 3 };
 const INTER_PAGE_DELAY_MS = 150;  // WAF-aware spacing between same-host pages
 
 // facetsList is a fixed constant on the finder; %3B is the encoded ';' separator.
@@ -85,40 +83,6 @@ function toEpochMs(value) {
 function sleep(ms, ctx) {
   if (typeof ctx?.sleep === 'function') return ctx.sleep(ms);
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Parses a `Retry-After` header value (seconds, or an HTTP-date) to ms, or null. */
-function parseRetryAfterMs(value) {
-  if (!value) return null;
-  const secs = Number(value);
-  if (Number.isFinite(secs) && secs >= 0) return secs * 1000;
-  const dateMs = Date.parse(value);
-  return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : null;
-}
-
-function isRetryableError(err) {
-  const status = err?.status;
-  if (status === 429) return true;
-  if (typeof status === 'number' && status >= 500) return true;
-  return status === undefined; // network error / timeout / abort — no status set
-}
-
-/** Fetches a single page, retrying transient failures with backoff + jitter. */
-async function fetchPageWithRetry(ctx, api, opts) {
-  let lastErr;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      return await ctx.fetchJson(api, opts);
-    } catch (err) {
-      lastErr = err;
-      if (attempt === MAX_RETRIES || !isRetryableError(err)) throw err;
-      const backoff = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
-      const retryAfterMs = parseRetryAfterMs(err?.retryAfter);
-      const delayMs = retryAfterMs !== null ? Math.min(retryAfterMs, RETRY_MAX_DELAY_MS * 4) : (backoff + Math.random() * 250);
-      await sleep(delayMs, ctx);
-    }
-  }
-  throw lastErr;
 }
 
 /**
@@ -280,10 +244,10 @@ export default {
       assertOracleUrl(apiUrl); // SSRF guard before every fetch
       if (page > 0) await sleep(INTER_PAGE_DELAY_MS, ctx);
 
-      const json = await fetchPageWithRetry(ctx, apiUrl, {
+      const json = await fetchJsonWithRetry(ctx, apiUrl, {
         redirect: 'error',
         headers: { 'User-Agent': BROWSER_LIKE_USER_AGENT, Accept: 'application/json' },
-      });
+      }, RETRY_POLICY);
 
       const parsed = parseOracleResponse(json, site, entry.name);
       all.push(...parsed);
