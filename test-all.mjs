@@ -8158,6 +8158,92 @@ try {
   fail(`verify-pipeline report checks crashed: ${e.message}`);
 }
 
+// ── VERIFY-PIPELINE, THE ALPHABET THE FIXTURE ABOVE DOES NOT COVER ──────
+// The fixture above proves the duplicate MECHANISM works. Every string in it
+// is ASCII, so it cannot tell "the detector works" apart from "the detector
+// works for Latin names" — and the difference is not academic. `İ`.toLowerCase()
+// yields `i` + U+0307 (a combining dot that survives normalization), so
+// `İstanbul Tekstil` and `Istanbul Tekstil` key differently and the duplicate
+// goes UNDETECTED. That is the opposite failure to the one fixed in #2393,
+// where every non-Latin name collapsed to '' and everything collided: that was
+// loud and got fixed. This one is silent, and it is the integrity checker
+// itself that returns the green.
+//
+// THIS TEST PINS TODAY'S BEHAVIOR ON PURPOSE. It is not an endorsement: the
+// targeted fix (strip U+0307 after lowercasing) is measured and does NOT touch
+// Škoda/Nestlé/Zürich, but normalizeTextKey is a frozen contract surface with
+// eight production consumers plus the web mirror, so applying it is a
+// coordinated decision, not a drive-by. If you are here because this assertion
+// failed, you did not break anything: you changed that decision. Invert the
+// expectation, update tests/fixtures/company-key-corpus.json, and land it in
+// lockstep with the web.
+console.log('\n🧪 Testing verify-pipeline duplicate detection across alphabets...');
+try {
+  const tkTmp = mkdtempSync(join(tmpdir(), 'career-ops-verify-turkish-'));
+  try {
+    const tkReports = join(tkTmp, 'reports');
+    mkdirSync(tkReports, { recursive: true });
+    const tkTracker = join(tkTmp, 'applications.md');
+    const tkEnv = { ...process.env, CAREER_OPS_TRACKER: tkTracker, CAREER_OPS_REPORTS: tkReports };
+    const tkReport = (company, role) =>
+      `# Evaluación: ${company} — ${role}\n\n## Machine Summary\n\n\`\`\`yaml\ncompany: "${company}"\nrole: "${role}"\nscore: 4.0\n\`\`\`\n`;
+
+    // Same employer, same role, two spellings a Turkish user types interchangeably.
+    writeFileSync(join(tkReports, '001-istanbul-2026-02-01.md'), tkReport('İstanbul Tekstil', 'Yazılım Mühendisi'));
+    writeFileSync(join(tkReports, '002-istanbul-2026-02-02.md'), tkReport('Istanbul Tekstil', 'Yazılım Mühendisi'));
+    writeFileSync(tkTracker,
+      '# Applications Tracker\n\n' +
+      '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n' +
+      '|---|------|---------|------|-------|--------|-----|--------|-------|\n' +
+      '| 1 | 2026-02-01 | İstanbul Tekstil | Yazılım Mühendisi | 4.0/5 | Evaluated | ❌ | [1](reports/001-istanbul-2026-02-01.md) | ok |\n' +
+      '| 2 | 2026-02-02 | Istanbul Tekstil | Yazılım Mühendisi | 4.0/5 | Evaluated | ❌ | [2](reports/002-istanbul-2026-02-02.md) | ok |\n');
+
+    const tkOut = run(NODE, ['verify-pipeline.mjs'], { env: tkEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+    if (tkOut === null) {
+      fail('verify-pipeline crashed on the Turkish dotted-I fixture');
+    } else {
+      // Check 2 reads the tracker's own Company column, where the two spellings
+      // survive intact, so this is the one the dotted I blinds.
+      if (/No exact duplicates found/.test(tkOut)) {
+        pass('tracker dup check (Check 2) does not fold the dotted I — pinned decision, not a fixed bug');
+      } else {
+        fail('dotted-I tracker duplicate is now detected: the frozen-surface decision changed, invert this expectation (see company-key-corpus.json)');
+      }
+      // …while Check 9 groups reports by the FILENAME slug, which is already
+      // ASCII by the time a report is written, so it flags the very same pair.
+      // The comment above `const normalizeKey = normalizeTextKey` promises the
+      // two checks "can never disagree about whether two roles are the same".
+      // They can, and here they do: sharing the function is not sharing the
+      // INPUT. Pinned so the contradiction is visible in CI instead of living
+      // only in a maintainer's notes.
+      if (/Duplicate reports[^\n]*001-istanbul/.test(tkOut)) {
+        pass('report dup check (Check 9) DOES flag the same pair — the two checks disagree, contrary to the guarantee written at its definition');
+      } else {
+        fail('Check 9 no longer flags the pair: the two checks now agree, so update the note at `const normalizeKey = normalizeTextKey`');
+      }
+    }
+    // The control that makes the assertions above mean something: within one
+    // spelling the tracker check must still fire, or "not detected" would prove
+    // nothing about the alphabet and everything about a broken fixture.
+    writeFileSync(tkTracker,
+      '# Applications Tracker\n\n' +
+      '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n' +
+      '|---|------|---------|------|-------|--------|-----|--------|-------|\n' +
+      '| 1 | 2026-02-01 | İstanbul Tekstil | Yazılım Mühendisi | 4.0/5 | Evaluated | ❌ | [1](reports/001-istanbul-2026-02-01.md) | ok |\n' +
+      '| 2 | 2026-02-02 | İstanbul Tekstil | Yazılım Mühendisi | 4.0/5 | Evaluated | ❌ | [2](reports/002-istanbul-2026-02-02.md) | ok |\n');
+    const tkCtl = run(NODE, ['verify-pipeline.mjs'], { env: tkEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+    if (tkCtl !== null && /Possible duplicates/.test(tkCtl)) {
+      pass('same-spelling Turkish duplicate IS caught by Check 2 (control: the fixture exercises the real path)');
+    } else {
+      fail('control failed: two identical Turkish rows were not flagged, so the fixture proves nothing');
+    }
+  } finally {
+    rmSync(tkTmp, { recursive: true, force: true });
+  }
+} catch (e) {
+  fail(`verify-pipeline alphabet checks crashed: ${e.message}`);
+}
+
 // ── VERIFY-PIPELINE ORPHAN REFERENCE RESOLUTION (#1425 follow-up) ────────────
 // Check 10 resolves "is this report referenced?" three ways. Two of them were
 // wrong:
