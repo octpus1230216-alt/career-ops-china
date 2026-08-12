@@ -377,6 +377,74 @@ try {
       fail(`${name} crashed${formatRunFailure()}`);
     }
   }
+
+  // reply-watch.mjs CLI flag validation (#2743). main() used to read
+  // process.argv[2] purely positionally with no flag checking: `--help` or
+  // any typo'd flag silently became the "candidates path" argument, and
+  // since that "path" doesn't exist, ensureCandidatesFile() created a real
+  // file named e.g. `--help` on disk. Mirrors the scan-ats-full.mjs
+  // KNOWN_FLAGS precedent (#1633/#1635): --help/-h print usage and exit 0,
+  // any other flag-looking arg is rejected with exit 1 — neither path
+  // should ever touch the filesystem.
+  {
+    const replyWatchCli = (...argv) => spawnSync(NODE, [join(scriptTmp, 'reply-watch.mjs'), ...argv], {
+      cwd: scriptTmp,
+      encoding: 'utf-8',
+      timeout: 30000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    const helpR = replyWatchCli('--help');
+    const hR = replyWatchCli('-h');
+    const bogusR = replyWatchCli('--bogus');
+
+    const helpOk = helpR.status === 0 && /Usage:/.test(helpR.stdout)
+      && !existsSync(join(scriptTmp, '--help'));
+    const hOk = hR.status === 0 && /Usage:/.test(hR.stdout)
+      && !existsSync(join(scriptTmp, '-h'));
+    const bogusOk = bogusR.status === 1 && /unrecognized flag/.test(bogusR.stderr)
+      && bogusR.stderr.includes('--bogus') && !existsSync(join(scriptTmp, '--bogus'));
+
+    if (helpOk && hOk && bogusOk) {
+      pass('reply-watch.mjs rejects --help/-h/unrecognized flags without creating a stray candidates file (#2743)');
+    } else {
+      fail(`reply-watch.mjs flag validation broken: help=${JSON.stringify({ status: helpR.status, stdout: helpR.stdout, exists: existsSync(join(scriptTmp, '--help')) })} h=${JSON.stringify({ status: hR.status, stdout: hR.stdout, exists: existsSync(join(scriptTmp, '-h')) })} bogus=${JSON.stringify({ status: bogusR.status, stderr: bogusR.stderr, exists: existsSync(join(scriptTmp, '--bogus')) })}`);
+    }
+
+    // CodeRabbit (#2745): --help paired with an unrecognized flag must still
+    // reject — unknown-flag validation has to run before --help short-circuits,
+    // otherwise `reply-watch.mjs --help --bogus` would exit 0 instead of erroring.
+    const mixedR = replyWatchCli('--help', '--bogus');
+    const mixedOk = mixedR.status === 1 && /unrecognized flag/.test(mixedR.stderr)
+      && mixedR.stderr.includes('--bogus') && !/Usage:/.test(mixedR.stdout)
+      && !existsSync(join(scriptTmp, '--help')) && !existsSync(join(scriptTmp, '--bogus'));
+    if (mixedOk) {
+      pass('reply-watch.mjs rejects an unrecognized flag even when --help is also present (#2745)');
+    } else {
+      fail(`reply-watch.mjs --help+--bogus should still error, not exit clean: ${JSON.stringify({ status: mixedR.status, stdout: mixedR.stdout, stderr: mixedR.stderr })}`);
+    }
+
+    // Regression: the existing no-args-uses-default and explicit-path
+    // behaviors must be unchanged by the new flag-parsing gate. Both run to
+    // completion here — the copied scriptTmp tracker has zero rows, so no
+    // candidates ever match an application, no update-recommendation prompt
+    // fires, and the process exits on its own without touching stdin.
+    const defaultCandidatesFile = join(scriptTmp, 'data', 'reply-candidates.json');
+    const noArgsR = replyWatchCli();
+    const noArgsOk = noArgsR.status === 0 && existsSync(defaultCandidatesFile)
+      && /application updates need review/.test(noArgsR.stdout);
+
+    const explicitPath = join(scriptTmp, 'my-candidates.json');
+    const explicitR = replyWatchCli(explicitPath);
+    const explicitOk = explicitR.status === 0 && existsSync(explicitPath)
+      && /application updates need review/.test(explicitR.stdout);
+
+    if (noArgsOk && explicitOk) {
+      pass('reply-watch.mjs no-args-uses-default and explicit-path behaviors unchanged (#2743 regression)');
+    } else {
+      fail(`reply-watch.mjs regression broken: noArgs=${JSON.stringify({ status: noArgsR.status, exists: existsSync(defaultCandidatesFile) })} explicit=${JSON.stringify({ status: explicitR.status, exists: existsSync(explicitPath) })}`);
+    }
+  }
 } finally {
   rmSync(scriptTmp, { recursive: true, force: true });
 }
