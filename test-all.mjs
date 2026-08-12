@@ -5440,6 +5440,21 @@ run(NODE, ['archive-posting.mjs']) !== null
   ? pass('no-args: exits 0 (shows help)')
   : fail('no-args: should exit 0 and print help');
 
+// argument validation: a trailing --report must not be dropped. It used to fall
+// through the parser and archive the posting with no report prefix — silently
+// unfindable, the exact failure --report exists to prevent.
+run(NODE, ['archive-posting.mjs', '--dry-run', 'https://boards.greenhouse.io/openai/jobs/123', '--report']) === null
+  ? pass('trailing --report: exits non-zero instead of archiving unkeyed')
+  : fail('trailing --report: should exit non-zero, not archive without a report prefix');
+
+// argument validation: both --report forms still key the capture
+for (const argv of [['--report', '4'], ['--report=4']]) {
+  const keyed = run(NODE, ['archive-posting.mjs', '--dry-run', 'https://boards.greenhouse.io/openai/jobs/123', ...argv]);
+  keyed?.includes('jds/004-')
+    ? pass(`${argv.join(' ')}: capture is keyed to the report`)
+    : fail(`${argv.join(' ')}: capture missing the 004- report prefix`);
+}
+
 // argument validation: flag without URL → exits non-zero
 run(NODE, ['archive-posting.mjs', '--dry-run']) === null
   ? pass('flag-without-url: exits non-zero (URL required)')
@@ -5449,6 +5464,33 @@ run(NODE, ['archive-posting.mjs', '--dry-run']) === null
 run(NODE, ['archive-posting.mjs', '--company=Acme']) === null
   ? pass('--company without URL: exits non-zero')
   : fail('--company without URL: should exit non-zero');
+
+// --report: keys the capture to a report number so it resolves on a later day (#134)
+const reportEqOut = run(NODE, ['archive-posting.mjs', '--dry-run', '--report=42', 'https://boards.greenhouse.io/openai/jobs/123']);
+reportEqOut?.includes('jds/042-')
+  ? pass('--report=N: filename carries the zero-padded report number')
+  : fail('--report=N: report prefix missing from filename');
+
+// The space-separated form must consume its value; otherwise the bare-argument
+// branch takes it as the URL and the real URL is silently dropped.
+const reportSpaceOut = run(NODE, ['archive-posting.mjs', '--dry-run', '--report', '42', 'https://boards.greenhouse.io/openai/jobs/123']);
+reportSpaceOut?.includes('jds/042-') && reportSpaceOut?.toLowerCase().includes('openai')
+  ? pass('--report N: value consumed, URL still parsed')
+  : fail('--report N: swallowed the URL or dropped the report number');
+
+// omitting --report leaves the historical filename shape untouched
+const noReportOut = run(NODE, ['archive-posting.mjs', '--dry-run', 'https://boards.greenhouse.io/openai/jobs/123']);
+noReportOut?.includes(`jds/${todayStr}_`)
+  ? pass('no --report: filename shape unchanged')
+  : fail('no --report: filename shape regressed');
+
+run(NODE, ['archive-posting.mjs', '--dry-run', '--report=abc', 'https://boards.greenhouse.io/openai/jobs/123']) === null
+  ? pass('--report with non-numeric value: exits non-zero')
+  : fail('--report with non-numeric value: should be rejected, not ignored');
+
+run(NODE, ['archive-posting.mjs', '--pipeline', '--report=42']) === null
+  ? pass('--report with --pipeline: rejected (report keys one posting)')
+  : fail('--report with --pipeline: should exit non-zero');
 
 // live render: gated behind Playwright executable availability
 let hasBrowser = false;
