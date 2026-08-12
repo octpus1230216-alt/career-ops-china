@@ -396,6 +396,21 @@ export function normalizeTextKey(value, separator = '') {
   return String(value ?? '')
     .normalize('NFKC')
     .toLowerCase()
+    // Drop the combining dot that lowercasing a Turkish dotted capital leaves
+    // behind. `'İ'.toLowerCase()` yields `i` + U+0307, not a plain `i`, so
+    // `İstanbul Tekstil` and `Istanbul Tekstil` keyed differently while reading
+    // identically on screen: the tracker treated one employer as two, and the
+    // user had no way to see why (#2705, #2736, and verify-pipeline's duplicate
+    // check, which returned a false green because of it).
+    //
+    // Scoped on purpose to the mark that lowercasing CREATES. Accents the user
+    // actually typed still separate keys: Škoda/Skoda, Nestlé/Nestle,
+    // Zürich/Zurich and Müller/Muller all stay distinct, and so does
+    // `İŞ BANKASI`/`Is Bankasi`, because `Ş` is a different letter rather than
+    // a casing artifact. This removes an artifact, it does not fold scripts.
+    .normalize('NFD')
+    .replace(/̇/g, '')
+    .normalize('NFC')
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, separator)
     .trim();
 }

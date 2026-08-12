@@ -28,6 +28,16 @@ export function normalizeTextKey(value, separator = "") {
   return String(value ?? "")
     .normalize("NFKC")
     .toLowerCase()
+    // Mirrors the core exactly, including this step: lowercasing a Turkish
+    // dotted capital leaves a combining dot behind (`'İ'.toLowerCase()` is
+    // `i` + U+0307), so the key drifts from the visually identical plain `i`.
+    // Scoped to the artifact casing creates: Škoda/Skoda and Nestlé/Nestle
+    // still key apart, because those marks are letters the user typed.
+    // Kept byte-for-byte in step with tracker-parse.mjs — test-all §55.7
+    // compares the two and fails on any divergence.
+    .normalize("NFD")
+    .replace(/̇/g, "")
+    .normalize("NFC")
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, separator)
     .trim();
 }

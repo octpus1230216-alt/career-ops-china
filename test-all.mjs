@@ -8227,10 +8227,13 @@ try {
     } else {
       // Check 2 reads the tracker's own Company column, where the two spellings
       // survive intact, so this is the one the dotted I blinds.
-      if (/No exact duplicates found/.test(tkOut)) {
-        pass('tracker dup check (Check 2) does not fold the dotted I — pinned decision, not a fixed bug');
+      // Decision changed 12-ago (Santiago): the targeted fix landed, so the
+      // tracker check now folds the dotted I and DOES catch the duplicate.
+      // Left pinned in the opposite direction so a revert is loud.
+      if (/Possible duplicates/.test(tkOut)) {
+        pass('tracker dup check (Check 2) now folds the dotted I and catches the duplicate');
       } else {
-        fail('dotted-I tracker duplicate is now detected: the frozen-surface decision changed, invert this expectation (see company-key-corpus.json)');
+        fail('dotted-I tracker duplicate no longer detected: the targeted fix regressed (see company-key-corpus.json)');
       }
       // …while Check 9 groups reports by the FILENAME slug, which is already
       // ASCII by the time a report is written, so it flags the very same pair.
