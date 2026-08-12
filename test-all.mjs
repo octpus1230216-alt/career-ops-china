@@ -13751,6 +13751,41 @@ try {
         } else {
           fail(`web company-key mirror DRIFTED from the core — ${drift.length} case(s): ${drift.slice(0, 3).join(' | ')}`);
         }
+
+        // 55.7b PAIR SEMANTICS — what parity alone cannot see.
+        // The comparison above proves core and mirror AGREE. It says nothing
+        // about whether they agree on the RIGHT answer: two identical wrong
+        // implementations pass it silently. That is not hypothetical — on
+        // 12-ago the Turkish dotted-I fix shipped as NFD → strip U+0307 → NFC,
+        // which also decomposed the PRECOMPOSED dots of ż, ė and ġ and
+        // collapsed Żubr/Zubr, Ėmė/Eme and Ġenerali/Generali. Both sides were
+        // equally wrong, so parity stayed green and the corpus (which had no
+        // dotted-letter case) could not fail either. Polish, Lithuanian and
+        // Maltese employers silently became one key with their ASCII spelling.
+        // These assertions fix the OUTCOME, not the implementation.
+        const pairs = [
+          // [a, b, mustMatch, why]
+          ['İstanbul Tekstil', 'Istanbul Tekstil', true, 'Turkish dotted capital: the dot is an artifact of toLowerCase, not typed'],
+          ['Türk İlaç', 'Türk Ilaç', true, 'same artifact mid-word'],
+          ['Żubr', 'Zubr', false, 'Polish ż: the dot is a letter the user typed'],
+          ['Ėmė', 'Eme', false, 'Lithuanian ė: same class as ż'],
+          ['Ġenerali', 'Generali', false, 'Maltese ġ, and Generali is a different real company'],
+          ['Škoda', 'Skoda', false, 'the original collision this key exists to prevent'],
+          ['Nestlé', 'Nestle', false, 'accent typed by the user'],
+          ['İŞ BANKASI', 'Is Bankasi', false, 'Ş is a different letter, not a casing artifact'],
+        ];
+        const wrong = [];
+        for (const [a, b, mustMatch, why] of pairs) {
+          const matched = coreFn(a, '') === coreFn(b, '');
+          if (matched !== mustMatch) {
+            wrong.push(`${JSON.stringify(a)} vs ${JSON.stringify(b)}: ${matched ? 'match' : 'differ'}, expected ${mustMatch ? 'match' : 'differ'} (${why})`);
+          }
+        }
+        if (wrong.length === 0) {
+          pass(`company-key pair semantics hold on all ${pairs.length} pairs (casing artifacts fold, typed marks do not)`);
+        } else {
+          fail(`company-key pair semantics BROKEN — ${wrong.length}: ${wrong.slice(0, 3).join(' | ')}`);
+        }
         // Guard of the guard, in TWO directions, because each covers a hole the
         // other cannot see:
         //  (a) the RULES could regress in the core itself, and

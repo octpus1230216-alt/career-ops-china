@@ -403,14 +403,14 @@ export function normalizeTextKey(value, separator = '') {
     // user had no way to see why (#2705, #2736, and verify-pipeline's duplicate
     // check, which returned a false green because of it).
     //
-    // Scoped on purpose to the mark that lowercasing CREATES. Accents the user
-    // actually typed still separate keys: Škoda/Skoda, Nestlé/Nestle,
-    // Zürich/Zurich and Müller/Muller all stay distinct, and so does
-    // `İŞ BANKASI`/`Is Bankasi`, because `Ş` is a different letter rather than
-    // a casing artifact. This removes an artifact, it does not fold scripts.
-    .normalize('NFD')
-    .replace(/̇/g, '')
-    .normalize('NFC')
+    // NO `NFD` here, and that is the whole safety property. NFKC leaves ż, ė
+    // and ġ as SINGLE precomposed code points, so this strip cannot reach
+    // their dots — while `i` + U+0307 has no precomposed form and stays
+    // exposed. Decomposing first (NFD → strip → NFC) looks equivalent and is
+    // not: it collapsed Żubr/Zubr, Ėmė/Eme and Ġenerali/Generali, which is
+    // Polish, Lithuanian and Maltese losing the distinction (caught in main
+    // by career-ops-ui, 12-ago). The protection is structural, not a list.
+    .replace(/̇/gu, '')
     .replace(/[^\p{L}\p{M}\p{N}]+/gu, separator)
     .trim();
 }
