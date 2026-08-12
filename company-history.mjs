@@ -348,8 +348,11 @@ export function computeResponsiveness(rows, followupCountsByAppNum, opts = {}) {
         // Real set-status.mjs syntax (it rejects unknown flags, so the
         // instruction must only use flags that exist): --on records the real
         // response date in the status ledger — the file funnel-velocity.mjs
-        // reads dates back from. A date buried in --note free text is parsed
-        // by nothing.
+        // reads dates back from. A *response* date buried in --note free text
+        // is parsed by nothing. (Applied dates are a different story: this same
+        // file falls back to parseAppliedDate(row.notes) forty lines up, which
+        // is why the qualifier matters — dropping it reads as "dates in notes
+        // are dead", and that fallback is load-bearing.)
         clearInstruction: `if they actually responded, node set-status.mjs --row ${row.num} <state> --on <response-date> clears this`,
       });
     } else if (RESPONDED_STATUSES.has(normalized)) {
