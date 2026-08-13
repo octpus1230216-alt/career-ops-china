@@ -155,7 +155,9 @@ function parseArgs(argv) {
 function main() {
   const { json, query } = parseArgs(process.argv);
   if (!query) {
-    console.log('Usage: node find.mjs <report# | tracker# | company/role fragment> [--json]');
+    // The same USAGE the flag paths print. A second hand-written copy is a
+    // second thing to keep in step, which is the class of bug #2773 was about.
+    console.log(USAGE);
     process.exitCode = 1;
     return;
   }
