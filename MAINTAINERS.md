@@ -8,8 +8,11 @@ This file lists who maintains career-ops and how contributors grow into review a
 |------|-----|-------|
 | Lead maintainer | [@santifer](https://github.com/santifer) | All areas; final say on architecture, scoring, and the data contract |
 | Reviewer | [@FReptar0](https://github.com/FReptar0) | Dashboard, tracker, CI, updater — triage, labels, first-pass reviews; his approvals unblock merges |
+| Area owner | [@Scott-Emberson](https://github.com/Scott-Emberson) | Test-suite infrastructure (`tests/`) and the Go dashboard (`dashboard/`) — code owner on both, so PRs touching them route to him for review |
 
 Reviewers and additional maintainers are added as the contributor ladder below produces them. This list growing slowly is by design — see "Trust & access" below.
+
+**Area owner** is the rung between reviewer and maintainer: write access plus named ownership of a specific area, so review of that area routes automatically instead of queueing behind one person. It routes review, it does not skip it — branch protection still requires an approval on every PR, for everyone on this list.
 
 ## The contributor ladder
 
