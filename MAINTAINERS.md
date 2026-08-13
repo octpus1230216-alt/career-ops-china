@@ -12,7 +12,11 @@ This file lists who maintains career-ops and how contributors grow into review a
 
 Reviewers and additional maintainers are added as the contributor ladder below produces them. This list growing slowly is by design — see "Trust & access" below.
 
-**Area owner** is the rung between reviewer and maintainer: write access plus named ownership of a specific area, so review of that area routes automatically instead of queueing behind one person. It routes review, it does not skip it — branch protection still requires an approval on every PR, for everyone on this list.
+**Area owner** is the rung between reviewer and maintainer: write access plus named ownership of a specific area, so review of that area routes to the person carrying it instead of queueing behind one.
+
+Be clear about what that means, because it is stronger than "routing": this repository requires code-owner review, so **a PR touching an owned area cannot merge until its owner approves**. Ownership never *skips* review either — branch protection requires an approval on every PR, for everyone on this list, including the lead maintainer.
+
+A blocking gate whose owner is away is worse than no gate, and it fails invisibly: PRs simply sit there looking normal. So the expectation attached to an area is not availability, it is **saying so**. An owner who is busy for a week says it and the area is lifted for that week, with nothing lost and nothing implied. That is the supported path; force-merging past branch protection is not.
 
 ## The contributor ladder
 
