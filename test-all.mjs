@@ -13529,7 +13529,15 @@ try {
         } else {
           pass('states ACL FALLBACK carries every canonical state (#2282)');
         }
-      } else if (/CANONICAL_STATES/.test(aclSrc)) {
+        // Assert the ASSIGNMENT, not the appearance of the name. `/CANONICAL_STATES/`
+        // over the whole file was satisfied by the header COMMENT, i.e. by prose,
+        // and worse: the literal regex above is a brittle syntactic match (that
+        // exact name, that exact shape), so routing its miss here flipped its
+        // failure direction from red to green. A reformat or a rename would have
+        // passed silently with seven states unaccounted for. A future legitimate
+        // form (`= buildFrom(CANONICAL_STATES)`) fails this on purpose: widening
+        // the guard should be a decision, not a silence. (career-ops-ui's find.)
+      } else if (/const FALLBACK[^=]*=\s*CANONICAL_STATES\b/.test(aclSrc)) {
         pass('states ACL fallback derives from the frozen CANONICAL_STATES instead of copying states.yml (#2282)');
       } else {
         fail('states ACL has neither a complete FALLBACK table nor a derivation from CANONICAL_STATES — the degraded path can now drift unwatched (#2282)');
