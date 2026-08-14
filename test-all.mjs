@@ -10014,6 +10014,54 @@ try {
   fail(`Turkish casing guard crashed: ${e.message}`);
 }
 
+// ── ROLE TITLES IN NON-LATIN SCRIPTS (#2781) ──────────────────────
+// roleTokens ran an [a-z0-9\s] strip, so every non-Latin role title tokenized
+// to []. merge-tracker's dedup then never matched two spellings of the SAME
+// role at the same company, and a re-evaluation was appended as a duplicate row
+// instead of updating the existing one — while the Latin equivalent merged
+// cleanly. normalizeTitle also stripped every \p{Mn}, folding Devanagari
+// matras, Cyrillic breve and Japanese dakuten onto their bases.
+console.log('\n🧪 Testing role tokenization across scripts (#2781)...');
+try {
+  const { roleTokens, roleFuzzyMatch } = await import(pathToFileURL(join(ROOT, 'role-matcher.mjs')).href);
+
+  const empty = ['\u0411\u044D\u043A\u0435\u043D\u0434-\u0440\u0430\u0437\u0440\u0430\u0431\u043E\u0442\u0447\u0438\u043A', '\u0938\u0949\u092B\u094D\u091F\u0935\u0947\u092F\u0930 \u0907\u0902\u091C\u0940\u0928\u093F\u092F\u0930'].filter((t) => roleTokens(t).length === 0);
+  empty.length === 0
+    ? pass('space-separated non-Latin role titles produce tokens (#2781)')
+    : fail(`role titles still tokenize to nothing: ${empty.join(', ')}`);
+
+  const samePairs = [
+    ['Backend Engineer, Payments', 'Backend Engineer (Payments)'],
+    ['\u0411\u044D\u043A\u0435\u043D\u0434-\u0440\u0430\u0437\u0440\u0430\u0431\u043E\u0442\u0447\u0438\u043A, \u043F\u043B\u0430\u0442\u0435\u0436\u0438', '\u0411\u044D\u043A\u0435\u043D\u0434-\u0440\u0430\u0437\u0440\u0430\u0431\u043E\u0442\u0447\u0438\u043A (\u043F\u043B\u0430\u0442\u0435\u0436\u0438)'],
+  ];
+  const notMatched = samePairs.filter(([a, b]) => !roleFuzzyMatch(a, b));
+  notMatched.length === 0
+    ? pass('the same role written with different punctuation matches in every script (#2781)')
+    : fail(`same-role pairs did not match: ${notMatched.map(([a]) => a).join('; ')}`);
+
+  const diffPairs = [
+    ['Backend Engineer', 'Data Scientist'],
+    ['\u0411\u044D\u043A\u0435\u043D\u0434-\u0440\u0430\u0437\u0440\u0430\u0431\u043E\u0442\u0447\u0438\u043A', '\u0410\u043D\u0430\u043B\u0438\u0442\u0438\u043A \u0434\u0430\u043D\u043D\u044B\u0445'],
+  ];
+  const wronglyMatched = diffPairs.filter(([a, b]) => roleFuzzyMatch(a, b));
+  wronglyMatched.length === 0
+    ? pass('different roles stay distinct in every script (#2781)')
+    : fail(`widening merged different roles: ${wronglyMatched.map(([a, b]) => `${a}/${b}`).join('; ')}`);
+
+  // Marks that carry meaning survive; Latin accent-folding is unchanged (#2209).
+  const marks = [
+    ['\u0915\u0902\u092A\u0928\u0940', '\u0915\u092A\u0928\u0940', false, 'Devanagari matra'],
+    ['\u0419\u043E\u0433\u0443\u0440\u0442', '\u0418\u043E\u0433\u0443\u0440\u0442', false, 'Cyrillic breve'],
+    ['S\u00EAnior Backend Engineer', 'Senior Backend Engineer', true, 'Latin accent folding (#2209)'],
+  ];
+  const markWrong = marks.filter(([a, b, must]) => (roleTokens(a).join(' ') === roleTokens(b).join(' ')) !== must);
+  markWrong.length === 0
+    ? pass('meaningful marks survive while Latin accents still fold (#2781)')
+    : fail(`mark handling wrong: ${markWrong.map(([a, b, m, why]) => `${a}/${b} expected ${m ? 'same' : 'different'} (${why})`).join('; ')}`);
+} catch (e) {
+  fail(`role tokenization guard crashed: ${e.message}`);
+}
+
 // ── MERGE-TRACKER: DISTINCT NON-LATIN COMPANIES (#2429) ───────────
 // Sibling of the #1603 via guard, one column over. normalizeCompany() stripped
 // [^a-z0-9], so EVERY non-Latin company name folded to '' and compared equal to
