@@ -13479,6 +13479,37 @@ try {
     fail(`match-star scorer: exact tag match regressed (expected 3, got ${leadershipExactTag})`);
   }
 
+  // Non-Latin story banks (#2847). tokenize() stripped [^a-z0-9\s], so a story
+  // written in Russian or Hindi produced [] and scored 0 against a question in
+  // the SAME language — the matcher was inert, not degraded, for anyone whose
+  // language.output is not English.
+  {
+    const mk = (title, theme, action, result, tags = []) => ({ title, theme, action, result, tags });
+    const ru = mk('\u041C\u0438\u0433\u0440\u0430\u0446\u0438\u044F \u043F\u043B\u0430\u0442\u0435\u0436\u0435\u0439', '\u043F\u043B\u0430\u0442\u0435\u0436\u0438', '\u0412\u043E\u0437\u0433\u043B\u0430\u0432\u0438\u043B \u043C\u0438\u0433\u0440\u0430\u0446\u0438\u044E \u043F\u043B\u0430\u0442\u0451\u0436\u043D\u043E\u0439 \u043F\u043B\u0430\u0442\u0444\u043E\u0440\u043C\u044B', '\u0421\u043D\u0438\u0437\u0438\u043B \u043E\u0442\u043A\u0430\u0437\u044B', ['\u043F\u043B\u0430\u0442\u0435\u0436\u0438']);
+    const hi = mk('\u092D\u0941\u0917\u0924\u093E\u0928 \u092E\u093E\u0907\u0917\u094D\u0930\u0947\u0936\u0928', '\u092D\u0941\u0917\u0924\u093E\u0928', '\u092D\u0941\u0917\u0924\u093E\u0928 \u092E\u093E\u0907\u0917\u094D\u0930\u0947\u0936\u0928 \u0915\u093E \u0928\u0947\u0924\u0943\u0924\u094D\u0935', '\u0935\u093F\u092B\u0932\u0924\u093E\u090F\u0902 \u0918\u091F\u093E\u0908\u0902', ['\u092D\u0941\u0917\u0924\u093E\u0928']);
+
+    const ruTokens = tokenize('\u0420\u0430\u0441\u0441\u043A\u0430\u0436\u0438\u0442\u0435 \u043E \u043C\u0438\u0433\u0440\u0430\u0446\u0438\u0438 \u043F\u043B\u0430\u0442\u0435\u0436\u0435\u0439');
+    const hiTokens = tokenize('\u092E\u0941\u091D\u0947 \u092D\u0941\u0917\u0924\u093E\u0928 \u092E\u093E\u0907\u0917\u094D\u0930\u0947\u0936\u0928 \u0915\u0947 \u092C\u093E\u0930\u0947 \u092E\u0947\u0902 \u092C\u0924\u093E\u090F\u0902');
+
+    tokenize('\u041C\u0438\u0433\u0440\u0430\u0446\u0438\u044F').length > 0 && tokenize('\u092D\u0941\u0917\u0924\u093E\u0928').length > 0
+      ? pass('match-star: non-Latin text produces tokens (#2847)')
+      : fail('match-star: non-Latin text still tokenizes to nothing');
+
+    score(ru, ruTokens, []) > 0 && score(hi, hiTokens, []) > 0
+      ? pass('match-star: a story matches a question in its own language (#2847)')
+      : fail(`match-star: same-language match still scores 0 (ru=${score(ru, ruTokens, [])}, hi=${score(hi, hiTokens, [])})`);
+
+    // The widening must not make everything match everything.
+    score(ru, tokenize('\u0420\u0430\u0441\u0441\u043A\u0430\u0436\u0438\u0442\u0435 \u043E \u043D\u0430\u0439\u043C\u0435 \u043A\u043E\u043C\u0430\u043D\u0434\u044B'), []) === 0
+      ? pass('match-star: an unrelated same-language question still scores 0 (#2847)')
+      : fail('match-star: widening made an unrelated question match');
+
+    // Devanagari matras must survive; without \p{M} they become spaces.
+    tokenize('\u092D\u0941\u0917\u0924\u093E\u0928')[0] === '\u092D\u0941\u0917\u0924\u093E\u0928'
+      ? pass('match-star: Devanagari matras survive tokenization (#2847)')
+      : fail(`match-star: matras stripped — token came back as ${JSON.stringify(tokenize('\u092D\u0941\u0917\u0924\u093E\u0928'))}`);
+  }
+
   // match-star.mjs file must exist (existsSync-guarded in the script itself)
   if (existsSync(join(ROOT, 'match-star.mjs'))) {
     pass('match-star.mjs: file present in repo root');
