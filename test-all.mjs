@@ -2204,8 +2204,10 @@ const patternsMachineFields = readFile('analyze-patterns.mjs').match(/const MACH
 if (
   /^via:/m.test(batchMachineSummary) &&
   /^company_confidential:/m.test(batchMachineSummary) &&
+  /^reports_to:/m.test(batchMachineSummary) &&
   /['"]via['"]/.test(patternsMachineFields) &&
-  /['"]company_confidential['"]/.test(patternsMachineFields)
+  /['"]company_confidential['"]/.test(patternsMachineFields) &&
+  /['"]reports_to['"]/.test(patternsMachineFields)
 ) {
   pass('batch Machine Summary fields are preserved by the downstream parser');
 } else {
@@ -3490,6 +3492,20 @@ if ((batchPromptDoc.match(/advertised_comp/g) || []).length >= 2) {
   pass('batch prompt carries advertised_comp in both Machine Summary fences');
 } else {
   fail('batch prompt missing advertised_comp in one or both Machine Summary fences');
+}
+
+// One YAML fence at a time, each bounded to its own step. A count over the
+// whole file passes when one fence carries the key twice and the other carries
+// it not at all, and an unbounded tail lets any later line stand in for the
+// Step 3 fence.
+const step2SchemaSection = batchPromptDoc.match(/#### Machine Summary[\s\S]*?### Step 3 \u2014 Save the Report/)?.[0] ?? '';
+const step2SchemaFence = step2SchemaSection.match(/```yaml\n([\s\S]*?)\n```/)?.[1] ?? '';
+const step3Section = batchPromptDoc.match(/### Step 3 \u2014 Save the Report[\s\S]*?### Step 4 \u2014/)?.[0] ?? '';
+const step3SummaryFence = step3Section.match(/## Machine Summary\s*\n+```yaml\n([\s\S]*?)\n```/)?.[1] ?? '';
+if (/^reports_to:/m.test(step2SchemaFence) && /^reports_to:/m.test(step3SummaryFence)) {
+  pass('batch prompt carries reports_to in both Machine Summary fences');
+} else {
+  fail('batch prompt missing reports_to in one or both Machine Summary fences');
 }
 
 // ── upskill Learning Plan trust model (#1740, phase 2b) ──
