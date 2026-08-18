@@ -158,6 +158,7 @@ const SYSTEM_PATHS = [
   'lib/ascii-fold.mjs',
   'lib/cli-flags.mjs',
   'lib/gemini-node-floor.mjs',
+  'lib/local-today.mjs',
   'lib/latex-escape.mjs',
   'lib/latex-content.mjs',
   'lib/context-budget.mjs',
