@@ -10187,6 +10187,122 @@ try {
   fail(`merge-tracker fuzzy dedup tests crashed: ${e.message}`);
 }
 
+// buildRow used to emit rows from a hardcoded column list (num/date/company/
+// [via]/role/[location]/score/status/pdf/report/notes/[url]), ignoring the
+// actual header width. On a customized tracker with extra columns (e.g.
+// `… | Materials | Apply Link | Follow-up | Notes`) every merged row came out
+// NARROWER than the header, so header-driven readers (set-status.mjs) could no
+// longer parse them: the row's status became unaddressable through the
+// supported write path. Rows must round-trip at the header's exact width, with
+// unmapped cells as '—' and the report link preserved in Notes when the layout
+// has no Report column.
+console.log('\n🧪 Testing merge-tracker custom header width (extra columns, no Report column)...');
+try {
+  const widthTmp = mkdtempSync(join(tmpdir(), 'career-ops-width-'));
+  try {
+    mkdirSync(join(widthTmp, 'data'));
+    mkdirSync(join(widthTmp, 'reports'));
+    const additionsDir = join(widthTmp, 'additions');
+    mkdirSync(additionsDir);
+    const tracker = join(widthTmp, 'data', 'applications.md');
+    writeFileSync(tracker,
+      '# Applications Tracker\n\n' +
+      '| # | Date | Company | Role | Score | Status | Materials | Apply Link | Follow-up | Notes |\n' +
+      '|---|------|---------|------|-------|--------|-----------|------------|-----------|-------|\n' +
+      '| 1 | 2026-01-04 | StreamCo | Platform Engineer | 4.4/5 | Applied | ✅ | https://apply.example/1 | 2026-01-12 | existing |\n');
+    for (const n of ['003-acme-2026-01-05', '004-acme-2026-01-06']) {
+      writeFileSync(join(widthTmp, 'reports', `${n}.md`), '# fixture\n');
+    }
+    writeFileSync(join(additionsDir, '003-acme.tsv'),
+      '3\t2026-01-05\tAcme\tData Engineer\tEvaluated\t4.6/5\t❌\t[3](reports/003-acme-2026-01-05.md)\tnew eval\n');
+
+    const widthEnv = { ...process.env, CAREER_OPS_TRACKER: tracker, CAREER_OPS_ADDITIONS: additionsDir };
+    const widthResult = run(NODE, ['merge-tracker.mjs'], { env: widthEnv });
+    if (widthResult === null) {
+      fail('merge-tracker.mjs crashed on a 10-column custom-header tracker');
+    } else {
+      const lines = readFileSync(tracker, 'utf-8').split('\n').filter(l => l.startsWith('|'));
+      const headerWidth = lines[0].split('|').length;
+      const acmeRow = lines.find(l => l.includes('Acme'));
+
+      if (acmeRow && acmeRow.split('|').length === headerWidth) {
+        pass('merged row matches the header’s exact column count');
+      } else {
+        fail(`merged row width ${acmeRow ? acmeRow.split('|').length : 'n/a'} != header width ${headerWidth} (row: ${acmeRow})`);
+      }
+
+      const cells = acmeRow ? acmeRow.split('|').map(s => s.trim()) : [];
+      // Header-derived positions: 5=Score, 6=Status, 7=Materials(pdf), 8=Apply Link, 9=Follow-up, 10=Notes.
+      if (cells[5] === '4.6/5' && cells[6] === 'Evaluated') {
+        pass('score and status landed in their header-declared columns');
+      } else {
+        fail(`score/status misplaced: score cell='${cells[5]}', status cell='${cells[6]}'`);
+      }
+
+      if (cells[8] === '—' && cells[9] === '—') {
+        pass('columns career-ops has no field for are written as "—"');
+      } else {
+        fail(`unmapped columns not '—': apply link='${cells[8]}', follow-up='${cells[9]}'`);
+      }
+
+      // The merge normalizes the link relative to the tracker's directory
+      // (data/ → ../reports/…), so match on label + filename, not the raw TSV path.
+      if (/\[3\]\([^)]*reports\/003-acme-2026-01-05\.md\)/.test(cells[10] || '')) {
+        pass('report link preserved in Notes when the layout has no Report column');
+      } else {
+        fail(`report link dropped: notes cell='${cells[10]}'`);
+      }
+
+      // Round-trip half: a re-evaluation of the same report must UPDATE the row
+      // it just wrote (extractReportNum falls back to the Notes-embedded link),
+      // not append a duplicate.
+      writeFileSync(join(additionsDir, '003-acme-reeval.tsv'),
+        '3\t2026-01-06\tAcme\tData Engineer\tEvaluated\t4.8/5\t❌\t[3](reports/003-acme-2026-01-05.md)\tre-eval\n');
+      const rerun = run(NODE, ['merge-tracker.mjs'], { env: widthEnv });
+      if (rerun === null) {
+        fail('merge-tracker.mjs crashed on re-evaluation against a Notes-embedded report link');
+      } else {
+        const after = readFileSync(tracker, 'utf-8').split('\n').filter(l => l.includes('Acme'));
+        if (after.length === 1 && after[0].includes('4.8/5')) {
+          pass('re-evaluation updated the row via the Notes-embedded report link (no duplicate)');
+        } else {
+          fail(`re-evaluation dedup broken: ${after.length} Acme rows, expected 1 updated to 4.8/5`);
+        }
+      }
+
+      // Rebuild-preservation half: updating an EXISTING row must keep the
+      // user-entered values in columns career-ops has no field for (the
+      // seeded StreamCo row carries an Apply Link URL and a Follow-up date).
+      // Without seeding from the row's current cells, the '—' fill would
+      // wipe both on every update.
+      writeFileSync(join(additionsDir, '004-streamco.tsv'),
+        '4\t2026-01-07\tStreamCo\tPlatform Engineer\tEvaluated\t4.7/5\t❌\t[4](reports/004-acme-2026-01-06.md)\tre-eval of seeded row\n');
+      const preserveRun = run(NODE, ['merge-tracker.mjs'], { env: widthEnv });
+      if (preserveRun === null) {
+        fail('merge-tracker.mjs crashed while updating a row with populated custom columns');
+      } else {
+        const scRows = readFileSync(tracker, 'utf-8').split('\n').filter(l => l.includes('StreamCo'));
+        // Cell-exact assertions, not whole-row substrings: they prove each value
+        // sits in ITS OWN header-declared column (a substring match would pass
+        // with the URL shifted under the wrong header — the very bug this suite
+        // guards), and an exact equality is not URL substring "sanitization",
+        // which CodeQL rightly flags as a tainted pattern to copy.
+        const scCells = scRows.length === 1 ? scRows[0].split('|').map(s => s.trim()) : [];
+        if (scRows.length === 1 && scCells[5] === '4.7/5'
+            && scCells[8] === 'https://apply.example/1' && scCells[9] === '2026-01-12') {
+          pass('update preserved user-entered Apply Link and Follow-up cells');
+        } else {
+          fail(`custom-column values lost on update: ${scRows[0]}`);
+        }
+      }
+    }
+  } finally {
+    rmSync(widthTmp, { recursive: true, force: true });
+  }
+} catch (e) {
+  fail(`merge-tracker custom header width tests crashed: ${e.message}`);
+}
+
 // merge-tracker used to clobber an Applied row when a sibling req's only
 // distinguishing qualifier was a slashed acronym: "(CI/CD)" tokenized to
 // nothing, the fuzzy tier matched, and the update path rewrote the existing
