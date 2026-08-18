@@ -127,3 +127,4 @@ public commit with a stated reason.
 - @arr900 | Arunraj | 2026-08-15 | id:29600103 | src:https://github.com/santifer/career-ops/discussions/2910 | n:79
 - @omega-strikes | 2026-08-17 | "Optimizing and accelarating my job seeking process" | id:205552426 | src:https://github.com/santifer/career-ops/discussions/2973 | n:80
 - @EM917 | YiLong(Elon) Mei | 2026-08-17 | id:130506559 | src:https://github.com/santifer/career-ops/discussions/2985 | n:81
+- @prajwalyb | 2026-08-18 | id:32199473 | src:https://github.com/santifer/career-ops/discussions/3012 | n:82
