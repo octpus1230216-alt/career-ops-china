@@ -133,3 +133,4 @@ public commit with a stated reason.
 - @katkurigopi05 | Gopi Krishna Reddy Katkuri | 2026-08-19 | "i have tried to build my own job hunter but i didn't go well so i am trying to use this awesome repo to fix mine" | id:231100182 | src:https://github.com/santifer/career-ops/discussions/3063 | n:85
 - @TMFNK | TMFNK | 2026-08-19 | id:235670256 | src:https://github.com/santifer/career-ops/discussions/3068 | n:86
 - @etugrand | Etugrand | 2026-08-19 | id:44446037 | src:https://github.com/santifer/career-ops/discussions/3069 | n:87
+- @kaarthiiik | Karthik Taduvai | 2026-08-19 | id:3398790 | src:https://github.com/santifer/career-ops/discussions/3074 | n:88
