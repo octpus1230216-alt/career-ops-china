@@ -767,10 +767,144 @@ export function gitStatusEntries(root = ROOT) {
   return parsePorcelainStatus(gitRawIn(root, 'status', '--porcelain'));
 }
 
+/**
+ * Characters that can legally precede a regex literal. A `/` after any of them
+ * opens a pattern; after an identifier, a closing bracket or a literal it is
+ * division. Nothing else distinguishes the two.
+ */
+const REGEX_LITERAL_PREDECESSORS = new Set(
+  ['', '(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '<', '>', '~', '^'],
+);
+
+/**
+ * Consume a quoted literal starting at `start`, returning its raw inner text
+ * and the offset just past the closing quote. Escapes are copied through
+ * verbatim, which keeps the previous contract (the entries are source text,
+ * not decoded values) while stopping `\'` from ending the literal early.
+ */
+function readStringLiteral(source, start, quote) {
+  let value = '';
+  let index = start + 1;
+  while (index < source.length && source[index] !== quote) {
+    if (source[index] === '\\') {
+      value += source.slice(index, index + 2);
+      index += 2;
+      continue;
+    }
+    value += source[index];
+    index += 1;
+  }
+  return { value, end: index + 1 };
+}
+
+/**
+ * Consume a regex literal starting at `start` and return the offset just past
+ * it. An unterminated pattern, or one broken by a newline, was not a regex
+ * after all, so the scan resumes one character in rather than swallowing the
+ * rest of the file.
+ */
+function skipRegexLiteral(source, start) {
+  let index = start + 1;
+  let inCharacterClass = false;
+  while (index < source.length) {
+    const char = source[index];
+    if (char === '\\') {
+      index += 2;
+      continue;
+    }
+    if (char === '\n') return start + 1;
+    if (char === '[') inCharacterClass = true;
+    else if (char === ']') inCharacterClass = false;
+    else if (char === '/' && !inCharacterClass) return index + 1;
+    index += 1;
+  }
+  return start + 1;
+}
+
+/**
+ * Read a string-literal array out of updater source text.
+ *
+ * The source is scanned left to right rather than pattern-matched, because a
+ * regex cannot tell code from prose. Comments, string literals, escapes and
+ * regex literals are each consumed whole, and the array ends at the bracket
+ * that returns depth to zero rather than at the first `];` in the text. So
+ * `//` inside `'https://host/file'` stays part of the path, an apostrophe in
+ * `// upstream's own files` does not open a string that eats the next entry,
+ * `// means "do not touch"` adds no phantom path, a `];` inside a comment does
+ * not end the array early, and a commented-out declaration is never selected.
+ * None of these threw before: the caller got a plausible-looking list that was
+ * wrong.
+ *
+ * That matters most where this reads a source we did not write: apply() calls
+ * it on the TARGET updater fetched from FETCH_HEAD, so one apostrophe added
+ * upstream would corrupt the manifest on every client that upgrades, not on
+ * the machine where it was typed (#3099).
+ *
+ * Known limit: template-literal interpolation is treated as ordinary text. A
+ * path manifest has no reason to contain one, and reading it properly would
+ * need a parser rather than a scanner.
+ *
+ * @param {string} source - Updater source text.
+ * @param {string} name - Array binding to read, e.g. 'SYSTEM_PATHS'.
+ * @returns {string[]} Declared entries, in source order. Empty when absent.
+ */
 export function extractArrayFromSource(source, name) {
-  const match = source.match(new RegExp(`const\\s+${name}\\s*=\\s*\\[([\\s\\S]*?)\\];`));
-  if (!match) return [];
-  return Array.from(match[1].matchAll(/['"]([^'"]+)['"]/g), (entry) => entry[1]);
+  const declaration = new RegExp(`const\\s+${name}\\s*=\\s*\\[`, 'y');
+  const entries = [];
+  let depth = 0;
+  let previous = '';
+  let index = 0;
+
+  while (index < source.length) {
+    const char = source[index];
+    const pair = source.slice(index, index + 2);
+
+    if (pair === '//') {
+      const end = source.indexOf('\n', index);
+      index = end === -1 ? source.length : end;
+      continue;
+    }
+    if (pair === '/*') {
+      const end = source.indexOf('*/', index + 2);
+      index = end === -1 ? source.length : end + 2;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      const literal = readStringLiteral(source, index, char);
+      if (depth > 0) entries.push(literal.value);
+      previous = char;
+      index = literal.end;
+      continue;
+    }
+    if (char === '/' && REGEX_LITERAL_PREDECESSORS.has(previous)) {
+      index = skipRegexLiteral(source, index);
+      previous = '/';
+      continue;
+    }
+
+    if (depth > 0) {
+      if (char === '[') depth += 1;
+      else if (char === ']') {
+        depth -= 1;
+        if (depth === 0) return entries;
+      }
+    } else if (char === 'c') {
+      declaration.lastIndex = index;
+      if (declaration.test(source)) {
+        depth = 1;
+        index = declaration.lastIndex;
+        continue;
+      }
+    }
+
+    if (!/\s/.test(char)) previous = char;
+    index += 1;
+  }
+
+  // An array that never closes is malformed source. Report nothing rather than
+  // a partial manifest: `apply` merges an empty list away, but would act on a
+  // truncated one.
+  return [];
 }
 
 function mergePathLists(...lists) {
