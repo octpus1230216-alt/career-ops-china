@@ -2918,6 +2918,206 @@ if (
   }
 }
 
+// --- Block G AI-screening disclosure signal (#2892, jurisdiction-compliance-lens umbrella #2026) ---
+{
+  // 1. Jurisdiction table exists, parses as YAML, and all three verified
+  //    seeds (US-NY-NYC, US-IL, EU) are complete per the header schema.
+  const asdPath = join(ROOT, 'templates', 'jurisdiction-ai-screening-disclosure.yml');
+  if (!existsSync(asdPath)) {
+    fail('templates/jurisdiction-ai-screening-disclosure.yml missing (#2892)');
+  } else {
+    try {
+      const asdRaw = readFileSync(asdPath, 'utf-8');
+      const asd = yaml.load(asdRaw);
+      const j = asd?.jurisdictions || {};
+      const rowComplete = (row) =>
+        row &&
+        typeof row.jurisdiction_name === 'string' && row.jurisdiction_name.length > 0 &&
+        typeof row.law_name === 'string' && row.law_name.length > 0 &&
+        typeof row.effective === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.effective) &&
+        typeof row.requires === 'string' && row.requires.length > 0 &&
+        Array.isArray(row.disclosure_language_examples) && row.disclosure_language_examples.length > 0 &&
+        typeof row.official_source?.url === 'string' && row.official_source.url.length > 0 &&
+        typeof row.legal_basis === 'string' && row.legal_basis.length > 0 &&
+        Array.isArray(row.sources) && row.sources.length > 0 &&
+        Boolean(row.as_of);
+
+      // CodeRabbit finding 1 (#2896): a state-wide US-NY key is wrong — Local
+      // Law 144 splits into a job-location-keyed audit duty and a candidate-
+      // residency-keyed (five boroughs) notice duty. The row must be keyed
+      // city-specifically and carry BOTH condition fields explicitly, so a
+      // generic "New York, USA" profile can never be mistaken for a match.
+      const nyRow = j['US-NY-NYC'];
+      const nyRowCityKeyed =
+        !j['US-NY'] && // the old state-wide key must be gone, not just supplemented
+        rowComplete(nyRow) &&
+        String(nyRow.effective) === '2023-07-05' &&
+        nyRow.law_name.includes('Local Law 144') &&
+        typeof nyRow.job_location_condition === 'string' && nyRow.job_location_condition.length > 0 &&
+        typeof nyRow.candidate_residency_condition === 'string' &&
+        /five boroughs|Manhattan/i.test(nyRow.candidate_residency_condition) &&
+        /New York State|not\s+NYC|not\s+sufficient/i.test(nyRow.candidate_residency_condition);
+
+      // CodeRabbit finding 2 (#2896): the EU AI Act's high-risk obligations
+      // for stand-alone Annex III systems were provisionally deferred (May
+      // 2026 Digital Omnibus agreement) from 2026-08-02 to 2027-12-02, and
+      // official_source.url must point at an actual EU institutional source
+      // (EUR-Lex or a *.europa.eu page) — not a third-party summary site.
+      const euRow = j['EU'];
+      const euRowCorrected =
+        rowComplete(euRow) &&
+        String(euRow.effective) === '2027-12-02' &&
+        euRow.law_name.includes('2024/1689') &&
+        /europa\.eu/i.test(euRow.official_source.url) &&
+        /Digital Omnibus/i.test(euRow.enforcement_notes || '') &&
+        /2026-08-02/.test(euRow.enforcement_notes || '') &&
+        /provisional/i.test(euRow.enforcement_notes || '');
+
+      if (
+        nyRowCityKeyed &&
+        rowComplete(j['US-IL']) && j['US-IL'].law_name.includes('820 ILCS 42') &&
+        euRowCorrected
+      ) {
+        pass('jurisdiction-ai-screening-disclosure.yml parses and all three seeds carry corrected facts: US-NY-NYC (Local Law 144, city-keyed with explicit job_location_condition + candidate_residency_condition, no leftover state-wide US-NY key), US-IL (820 ILCS 42), EU AI Act 2024/1689 (effective 2027-12-02 per the provisional Digital Omnibus deferral, official_source on a europa.eu domain) (#2896 CodeRabbit findings 1+2)');
+      } else {
+        fail('jurisdiction-ai-screening-disclosure.yml seeds incomplete/incorrect — needs US-NY-NYC (not state-wide US-NY) with job_location_condition + candidate_residency_condition (five-boroughs, explicitly excluding a generic New York State match), US-IL (820 ILCS 42), and EU (AI Act 2024/1689, effective 2027-12-02, official_source.url on a europa.eu domain, enforcement_notes documenting the provisional Digital Omnibus deferral from the original 2026-08-02 date) (#2896)');
+      }
+
+      if (
+        asdRaw.includes('CONTRIBUTION RULE') &&
+        asdRaw.includes('NEVER-ASSERT RULE') &&
+        asdRaw.includes('never a third-party mirror')
+      ) {
+        pass('jurisdiction-ai-screening-disclosure.yml header documents the contribution rule, the never-assert rule, and the official-source-only requirement (#2892)');
+      } else {
+        fail('jurisdiction-ai-screening-disclosure.yml header missing the contribution rule, never-assert rule, and/or official-source-only requirement (#2892)');
+      }
+    } catch (e) {
+      fail(`templates/jurisdiction-ai-screening-disclosure.yml does not parse as YAML: ${e.message} (#2892)`);
+    }
+  }
+
+  // 2. oferta.md carries Signal 15 with both the presence-based (a) and
+  //    corroborating-only (b) halves, the jurisdiction derivation mirroring
+  //    the agency-licensing/immigration-status pattern, and the not-legal-advice note.
+  const asdStart = ofertaMode.indexOf('**15. AI-Screening Disclosure**');
+  const asdEnd = ofertaMode.indexOf('### Output format:', Math.max(asdStart, 0));
+  const asdSection = asdStart >= 0 && asdEnd > asdStart ? ofertaMode.slice(asdStart, asdEnd) : '';
+  if (
+    asdSection &&
+    asdSection.includes('templates/jurisdiction-ai-screening-disclosure.yml') &&
+    asdSection.includes('config/profile.yml') &&
+    asdSection.includes('fires standalone') &&
+    asdSection.includes('corroborating-only') &&
+    asdSection.includes('never fires standalone') &&
+    asdSection.includes('No table row for the candidate') &&
+    asdSection.includes('not legal advice')
+  ) {
+    pass('oferta Block G Signal 15 pins the jurisdiction table reference, config/profile.yml jurisdiction derivation, presence-based standalone trigger, corroborating-only absence trigger, silent skip for no-row jurisdictions, not-legal-advice note (#2892)');
+  } else {
+    fail('oferta Block G missing/incomplete AI-screening disclosure section — needs table reference, config/profile.yml jurisdiction derivation, presence-based (a) firing standalone, absence-based (b) as corroborating-only (never standalone), silent skip for no-row jurisdictions, not-legal-advice note (#2892)');
+  }
+
+  // 2b. CodeRabbit finding 1 (#2896): a candidate profile that just says
+  //     "New York, USA" (state-level, no city) must NOT be treated as a
+  //     match for the NYC candidate-residency condition — the rule text
+  //     must say so explicitly, not leave it to inference.
+  if (
+    asdSection.includes('US-NY-NYC') &&
+    asdSection.includes('New York, USA" or "New York State" location string is NOT sufficient') &&
+    asdSection.includes('Buffalo or Albany') &&
+    asdSection.includes('candidate_residency_condition') &&
+    asdSection.includes('job_location_condition')
+  ) {
+    pass('oferta Block G Signal 15 explicitly rejects a state-wide "New York, USA"/"New York State" profile location as a match for the NYC candidate-residency condition, and distinguishes job_location_condition (not evaluated by this signal) from candidate_residency_condition (the only half this signal can check) (#2896 CodeRabbit finding 1)');
+  } else {
+    fail('oferta Block G Signal 15 must explicitly state that a generic "New York, USA"/"New York State" profile location does NOT satisfy the US-NY-NYC candidate-residency condition (Buffalo/Albany counter-example), and must distinguish job_location_condition from candidate_residency_condition (#2896 CodeRabbit finding 1)');
+  }
+
+  // 3. Hard rule: never fetches or scrapes official_source.url (zero-fetch pillar)
+  if (asdSection.includes('never fetches or scrapes anything')) {
+    pass('oferta AI-screening disclosure signal pins the never-fetch/scrape hard rule (#2892)');
+  } else {
+    fail('oferta AI-screening disclosure signal missing the never-fetch/scrape hard rule (#2892)');
+  }
+
+  // 4. Phrasing discipline holds in the report-facing text: the blockquote
+  //    templates describe the statutory fact + posting silence — never an
+  //    accusation that the employer skipped a required disclosure.
+  const asdQuoteLines = asdSection.split('\n').filter((l) => l.trimStart().startsWith('>'));
+  const asdAccusatory = asdQuoteLines.filter((l) =>
+    /(this|the)\s+employer\s+(is|was|are|were|failed|did\s+not)\s+(breaking|violating|skipped|non-compliant)/i.test(l)
+  );
+  if (asdSection && asdQuoteLines.length >= 2 && asdAccusatory.length === 0) {
+    pass('AI-screening disclosure report templates state statutory fact + posting silence only — no "employer failed/violated/non-compliant" assertions (#2892)');
+  } else {
+    fail(`AI-screening disclosure phrasing discipline broken: ${asdAccusatory.length ? `accusatory blockquote line(s): ${asdAccusatory[0].trim().slice(0, 80)}` : 'expected 2+ blockquote output templates (presence + corroborating-only) in the section'} (#2892)`);
+  }
+
+  // 5. Deferred follow-up (#2676 cross-reference, #1404/#1405 analytics layer)
+  //    is explicitly noted as out of scope, not silently absorbed.
+  if (asdSection.includes('#2676') && asdSection.includes('#1404/#1405')) {
+    pass('oferta AI-screening disclosure signal explicitly defers the #2676 cross-reference and #1404/#1405 analytics-layer follow-up (#2892)');
+  } else {
+    fail('oferta AI-screening disclosure signal should explicitly note the #2676 cross-reference and #1404/#1405 analytics-layer follow-up as deferred, not attempted here (#2892)');
+  }
+
+  // 6. Risk Summary row exists and follows the "activates automatically" pattern
+  const riskSummarySection = ofertaMode.slice(
+    ofertaMode.indexOf('## Risk Summary (after Block G)'),
+    ofertaMode.indexOf('Block format:')
+  );
+  if (
+    riskSummarySection.includes('AI-screening disclosure') &&
+    riskSummarySection.includes('activates automatically once the check exists')
+  ) {
+    pass('oferta Risk Summary table carries the AI-screening disclosure row, activating automatically once the check exists (#2892)');
+  } else {
+    fail('oferta Risk Summary table missing the AI-screening disclosure row (or missing the "activates automatically" phrasing) (#2892)');
+  }
+
+  // 7. templates/README.md documents the new table
+  const templatesReadme = readFile('templates/README.md');
+  if (templatesReadme.includes('jurisdiction-ai-screening-disclosure.yml')) {
+    pass('templates/README.md documents jurisdiction-ai-screening-disclosure.yml (#2892)');
+  } else {
+    fail('templates/README.md missing an entry for jurisdiction-ai-screening-disclosure.yml (#2892)');
+  }
+
+  // 8. batch/batch-prompt.md Machine Summary schema carries the new
+  //    ai_screening_disclosure risk_summary key (source of truth for downstream parsers)
+  const batchPrompt = readFile('batch/batch-prompt.md');
+  if (batchPrompt.includes('ai_screening_disclosure:')) {
+    pass('batch/batch-prompt.md Machine Summary schema includes the ai_screening_disclosure risk_summary key (#2892)');
+  } else {
+    fail('batch/batch-prompt.md Machine Summary schema missing the ai_screening_disclosure risk_summary key (#2892)');
+  }
+
+  // 9. check-table-freshness.mjs discovers the new table automatically —
+  //    schema-agnostic discovery, no per-table registration required (#2036).
+  //    CodeRabbit finding 3 (#2896): don't assert an exact row count (this
+  //    table explicitly invites community-contributed rows, per its own
+  //    header) — assert the three seed keys are present and every discovered
+  //    row carries as_of, so a legitimate 4th+ row never breaks this test,
+  //    but a missing seed or a row without as_of still fails it.
+  try {
+    const freshnessMod = await import('./check-table-freshness.mjs');
+    const asdDoc = yaml.load(asdPath && existsSync(asdPath) ? readFileSync(asdPath, 'utf-8') : '');
+    const rows = freshnessMod.extractRows(asdDoc || {});
+    const discoveredKeys = new Set(rows.map((r) => r.row?.jurisdiction));
+    const seedKeys = ['US-NY-NYC', 'US-IL', 'EU'];
+    const allSeedsDiscovered = seedKeys.every((k) => discoveredKeys.has(k));
+    const allRowsHaveAsOf = rows.length > 0 && rows.every((r) => !r.missingAsOf);
+    if (allSeedsDiscovered && allRowsHaveAsOf) {
+      pass(`check-table-freshness.mjs extractRows() auto-discovers all 3 seed rows (US-NY-NYC, US-IL, EU) of jurisdiction-ai-screening-disclosure.yml with as_of present, tolerating future community-contributed rows (${rows.length} rows discovered) — no registration step needed (#2036, #2896 CodeRabbit finding 3)`);
+    } else {
+      fail(`check-table-freshness.mjs extractRows() did not cleanly discover the seed rows of jurisdiction-ai-screening-disclosure.yml — discovered keys: ${[...discoveredKeys].join(', ') || '(none)'}, missing seeds: ${seedKeys.filter((k) => !discoveredKeys.has(k)).join(', ') || 'none'}, any missing as_of: ${!allRowsHaveAsOf} (#2896)`);
+    }
+  } catch (e) {
+    fail(`could not import check-table-freshness.mjs to verify auto-discovery: ${e.message} (#2892)`);
+  }
+}
+
 // --- Block G pay-transparency range-width signal (#2019, re-scoped #2280) ---
 {
   // Maintainer direction (#2280): the jurisdiction table is gone — no
