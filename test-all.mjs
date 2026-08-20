@@ -41,7 +41,7 @@ import { tmpdir } from 'os';
 import { promisify } from 'util';
 import { fileURLToPath, pathToFileURL } from 'url';
 import * as yaml from 'js-yaml';
-import { pass, fail, warn, run, lastRunFailure, formatRunFailure, fileExists, finish, ROOT, QUICK, NODE, getBash, toBashPath } from './tests/helpers.mjs';
+import { pass, fail, warn, run, lastRunFailure, formatRunFailure, fileExists, finish, ROOT, QUICK, NODE, DEFAULT_SCRIPT_TIMEOUT_MS, getBash, toBashPath } from './tests/helpers.mjs';
 import { flagValue, hasFlag } from './lib/cli-flags.mjs';
 
 /**
@@ -263,6 +263,12 @@ mjsFiles.forEach((f, i) => {
 
 console.log('\n2. Script execution (graceful on empty data)');
 
+// How much of its budget a script may consume before the suite says so. High
+// enough that ordinary CI variance stays quiet, low enough to leave room to act
+// before the kill: at 0.75 a 30s script warns at 22.5s, nearly a full run of
+// headroom.
+const SLOW_SCRIPT_WARN_FRACTION = 0.75;
+
 const scripts = [
   { name: 'cv-sync-check.mjs', expectExit: 1, allowFail: true }, // fails without cv.md (normal in repo)
   { name: 'verify-pipeline.mjs', expectExit: 0 },
@@ -304,7 +310,21 @@ const scripts = [
   { name: 'followup-seed-tests.mjs', expectExit: 0 },
   { name: 'paste-reply-tests.mjs', expectExit: 0 },
   { name: 'set-status-tests.mjs', expectExit: 0 },
-  { name: 'tracker-writer-lock-tests.mjs', expectExit: 0 },
+  // The one script in this list that genuinely needs longer than the shared
+  // budget. It spawns competing writer processes for 27 contention cases, and
+  // that cost is the behaviour under test rather than slack to be trimmed.
+  //
+  // Measured on current main on a 24-core Windows box, four consecutive runs:
+  // 13.4s, 17.8s, 19.8s, 20.1s — already 67% of the default 30s before a
+  // 2-core CI runner's load is added. On windows-latest it crossed the line and
+  // was killed mid-matrix (`exit null, signal SIGTERM`), while every other
+  // check on the same commit passed (#2906).
+  //
+  // Raised here rather than in run()'s default so the outlier is treated as an
+  // outlier: every other script keeps the 30s bound, and a NEW script that
+  // starts taking half a minute still fails loudly instead of inheriting a
+  // budget sized for this one.
+  { name: 'tracker-writer-lock-tests.mjs', expectExit: 0, timeoutMs: 180_000 },
   // Root-level standalone suites shipped in SYSTEM_PATHS but previously never
   // executed by CI (issue #1624). All are fast (<0.5s each), so they run in
   // both quick and full mode like their siblings above.
@@ -389,14 +409,61 @@ try {
     'utf-8'
   );
 
-  for (const { name, allowFail } of scripts) {
+  for (const script of scripts) {
+    const { name, allowFail, timeoutMs } = script;
     const parts = name.split(' ');
     const scriptFile = parts[0];
     const args = parts.slice(1);
+    // WHETHER a budget was declared is read from the key's presence, never
+    // inferred from its value. Every in-band sentinel here is also a value
+    // somebody could write, and each one costs a bug: the first draft used
+    // `??` for the budget and truthiness for the override, so `timeoutMs: 0`
+    // meant "no budget" to one line and "default" to the next; the second used
+    // `null` as its absent-marker, so an explicit `timeoutMs: null` skipped
+    // validation and silently took the default. `hasOwn` cannot be spoofed by
+    // a value, so the question has one answer.
+    //
+    // A declared-but-unusable value then fails loudly rather than falling back.
+    // This list is hand-edited, so a bad entry is a typo in the suite's own
+    // definition, and quietly substituting the default would hide it behind the
+    // very budget it was trying to set. `timeoutMs: undefined` is caught too —
+    // writing the key at all is a claim, and an unusable claim is a mistake.
+    // Integer, not merely finite: execFileSync rejects a fractional timeout with
+    // ERR_OUT_OF_RANGE, so `timeoutMs: 0.5` would pass a "looks like a number"
+    // check here and then blow up inside the run with an error about neither
+    // this list nor this script. Validation that stops short of what the
+    // consumer accepts just moves the failure somewhere less legible.
+    const declared = Object.hasOwn(script, 'timeoutMs');
+    if (declared && (!Number.isInteger(timeoutMs) || timeoutMs <= 0)) {
+      fail(`${name} declares an unusable timeoutMs (${String(timeoutMs)}) — must be a positive integer number of milliseconds`);
+      continue;
+    }
+    const budgetMs = declared ? timeoutMs : DEFAULT_SCRIPT_TIMEOUT_MS;
+    const startedAt = Date.now();
+    // Spread rather than defaulted: `{ timeout: undefined }` reads to
+    // execFileSync as "no timeout at all", which would turn a hung script into
+    // a hung CI job. Absent means absent, so run()'s own default stands.
     const result = run(NODE, [join(scriptTmp, scriptFile), ...args], {
       cwd: scriptTmp,
       stdio: ['pipe', 'pipe', 'pipe'],
+      ...(declared ? { timeout: timeoutMs } : {}),
     });
+    const elapsedMs = Date.now() - startedAt;
+    // A budget a script can raise for itself is a place to hide in, unless
+    // something still notices it creeping. Nothing did: the reason
+    // tracker-writer-lock-tests.mjs was killed rather than flagged is that
+    // spending 29 of its 30 seconds looked exactly like spending 2 — the suite
+    // reported "runs OK" either way, right up to the run where it did not.
+    //
+    // So the ceiling is not the only signal any more. A script that eats most
+    // of its budget says so while it is still passing, which is the point at
+    // which someone can act. This is a WARNING rather than a failure on
+    // purpose: a loaded runner is a normal reason to be slow, and turning that
+    // into a red run would trade one false failure for another.
+    if (result !== null && elapsedMs > budgetMs * SLOW_SCRIPT_WARN_FRACTION) {
+      warn(`${name} used ${(elapsedMs / 1000).toFixed(1)}s of its ${(budgetMs / 1000).toFixed(0)}s budget `
+        + `(${Math.round((elapsedMs / budgetMs) * 100)}%) — it is passing, but it is close to being killed for time`);
+    }
     if (result !== null) {
       pass(`${name} runs OK`);
     } else if (allowFail) {
@@ -15394,6 +15461,36 @@ console.log('\n59b. Pipeline lock (pipeline-lock.mjs)');
   const unit = run(NODE, ['--test', 'test/pipeline-lock.test.mjs']);
   if (unit !== null) pass('pipeline-lock unit tests pass');
   else fail('pipeline-lock unit tests failed (run: node --test test/pipeline-lock.test.mjs)');
+}
+
+console.log('\n59c. The exported script budget matches the one run() enforces');
+{
+  // DEFAULT_SCRIPT_TIMEOUT_MS and the `timeout: 30000` literal inside run() are
+  // the same number held in two places, because that execFileSync call is kept
+  // byte-identical on purpose — editing it makes CodeQL re-attribute its
+  // long-standing "uncontrolled command line" finding to whichever PR touched
+  // the line. A comment asks the two to stay in step, and a comment is not a
+  // mechanism: if they drift, the slow-script warning starts measuring against
+  // a budget nobody is enforcing, and the first sign is a script killed at a
+  // limit the suite never mentioned. Read the literal back and compare.
+  // Anchored on run()'s own `(exe, args, …)` call signature rather than on
+  // `execFileSync` alone: that file has six other execFileSync calls, and a
+  // pattern that takes the FIRST match would start comparing against whichever
+  // one grows a `timeout:` first — a guard quietly measuring the wrong number,
+  // which is worse than no guard because it still reports green.
+  //
+  // Zero or several matches is therefore a failure in its own right, not a
+  // reason to fall back to a best guess.
+  const helpersSrc = readFileSync(join(ROOT, 'tests', 'helpers.mjs'), 'utf-8');
+  const enforced = [...helpersSrc.matchAll(/execFileSync\(\s*exe\s*,\s*args\s*,\s*\{[^}]*?timeout:\s*(\d+)/g)];
+  if (enforced.length !== 1) {
+    fail(`expected exactly one timeout literal in run()'s execFileSync call, found ${enforced.length}`
+      + ' — if that call was refactored or duplicated, update this check alongside it');
+  } else if (Number(enforced[0][1]) === DEFAULT_SCRIPT_TIMEOUT_MS) {
+    pass(`run()'s enforced timeout (${enforced[0][1]}ms) matches the exported DEFAULT_SCRIPT_TIMEOUT_MS`);
+  } else {
+    fail(`budget drift: run() enforces ${enforced[0][1]}ms but DEFAULT_SCRIPT_TIMEOUT_MS is ${DEFAULT_SCRIPT_TIMEOUT_MS}ms`);
+  }
 }
 
 console.log('\n60. Cover-letter template resolver (generate-cover-letter.mjs)');
