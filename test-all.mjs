@@ -15219,6 +15219,106 @@ try {
   } else {
     fail('titles mode missing error handling for absent cv.md / portals.yml');
   }
+
+  // A mode that can only ADD keeps whatever the list started as — on day zero
+  // that is the template's 37, copied on doctor's instruction. #2751.
+  if (
+    titlesFlat.includes('may be proposed for removal on exactly one ground') &&
+    titlesFlat.includes('`cv.md` does not support it')
+  ) {
+    pass('titles mode can retire a keyword, on CV evidence alone');
+  } else {
+    fail('titles mode should be able to propose removals, grounded in cv.md');
+  }
+
+  // The user-layer guarantee. portals.yml may hold an evening of hand-pruning,
+  // so removal is per-keyword and confirmed, never a regeneration.
+  if (
+    titlesFlat.includes('There is no bulk "replace" and no silent rewrite') &&
+    titlesFlat.includes('one keyword at a time')
+  ) {
+    pass('titles mode never regenerates a curated portals.yml — removals are per-keyword and confirmed');
+  } else {
+    fail('titles mode missing the no-silent-rewrite guarantee for the user-layer portals.yml');
+  }
+
+  // Emptying `positive` makes the scanner match every posting on every board —
+  // strictly worse than the wrong keyword the removal was meant to fix.
+  // The failure mode that makes removal dangerous: reading "cv.md does not
+  // support it" as a string test. On one real setup 39 of 49 curated keywords
+  // are absent from cv.md as strings, and most of them are correct. #2751.
+  if (
+    titlesFlat.includes('never that it contains the word') &&
+    titlesFlat.includes('plausible candidate for a posting carrying this keyword')
+  ) {
+    pass('titles mode defines removal support as capability, not wording');
+  } else {
+    fail('titles mode must say that CV support means the capability, not the literal keyword');
+  }
+
+  // A phrase search proves the document MENTIONS a protection, not that it
+  // GRANTS one: 'the last remaining positive keyword' matches a sentence
+  // permitting its removal exactly as well as one forbidding it. Scope each
+  // check to the prohibition block, so a protection that drifts out of
+  // "Never remove:" fails here instead of passing on its own wording.
+  const neverStart = titlesFlat.indexOf('Never remove:');
+  const neverEnd = titlesFlat.indexOf('Show removals under their own heading');
+  const neverRemove =
+    neverStart >= 0 && neverEnd > neverStart ? titlesFlat.slice(neverStart, neverEnd) : '';
+  if (
+    neverRemove.includes('the last remaining positive keyword') &&
+    neverRemove.includes('`title_filter.negative`') &&
+    neverRemove.includes('the user added during this session')
+  ) {
+    pass(
+      'titles mode forbids removing the last positive keyword, the negative list and user-added keywords — inside the prohibition block, not merely somewhere in the document',
+    );
+  } else {
+    fail(
+      'titles mode must list the last positive keyword, title_filter.negative and user-added keywords under "Never remove:"',
+    );
+  }
+
+  // Every removal carries its own stated reason in both branches — that is what
+  // makes the diff reviewable rather than a list the user has to trust.
+  if (
+    titlesFlat.includes('list them individually with the reason') &&
+    titlesFlat.includes('it still goes through the diff with its reason')
+  ) {
+    pass('titles mode attaches a reason to each proposed removal, in both the template and edited cases');
+  } else {
+    fail('titles mode should require a per-removal reason rather than a bare removal list');
+  }
+
+  // portals.yml stores keywords and not who wrote them, so "the user added this
+  // in a previous run" is unknowable. The mode must say so, otherwise unknowable
+  // reads as false and a curated keyword loses its protection. #2751.
+  if (
+    titlesFlat.includes('`portals.yml` records no provenance') &&
+    titlesFlat.includes('treat it as unknowable rather than as false') &&
+    titlesFlat.includes('inference, not a record')
+  ) {
+    pass('titles mode treats keyword ownership as unknowable, never inferring the template from silence');
+  } else {
+    fail('titles mode must state that portals.yml records no provenance, so unknown ownership defaults to keep');
+  }
+
+  // The way out of an empty list is the CV this mode already reads; the
+  // template is the second option, not the first (#2751).
+  if (
+    titlesFlat.includes('derive the list from `cv.md` here rather than sending the user away') &&
+    titlesFlat.includes('or start from an example and edit it')
+  ) {
+    pass('titles mode answers an empty positive list from cv.md, with the template offered second');
+  } else {
+    fail('titles mode should derive from cv.md on an empty list rather than pointing at the template first');
+  }
+
+  if (titlesFlat.includes('ONE diff under separate headings')) {
+    pass('titles mode shows additions and removals in one diff, under separate headings');
+  } else {
+    fail('titles mode should show removals under their own heading in the same diff');
+  }
 } catch (e) {
   fail(`modes/titles.md missing or unreadable: ${e.message}`);
 }
