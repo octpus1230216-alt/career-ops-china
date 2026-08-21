@@ -8338,6 +8338,10 @@ try {
       // ...and tracker-utils imports the shared lock-contention helpers
       // (#2777 fix), so the fixture carries that import too.
       copyFileSync(join(ROOT, 'pipeline-lock.mjs'), join(e2eTmp, 'pipeline-lock.mjs'));
+      // ...and followup-cadence now resolves "today" as the LOCAL calendar day
+      // via lib/local-today.mjs (#3070), so the fixture carries that too.
+      mkdirSync(join(e2eTmp, 'lib'), { recursive: true });
+      copyFileSync(join(ROOT, 'lib', 'local-today.mjs'), join(e2eTmp, 'lib', 'local-today.mjs'));
       mkdirSync(join(e2eTmp, 'templates'), { recursive: true });
       copyFileSync(join(ROOT, 'templates', 'states.yml'), join(e2eTmp, 'templates', 'states.yml'));
       // 'junction' on Windows, not 'dir': a directory symlink needs

@@ -56,6 +56,7 @@ import * as yaml from 'js-yaml';
 import { parseScanHistory, detectReposts } from './detect-reposts.mjs';
 import { normalizeCompany, resolveTrackerPath } from './tracker-utils.mjs';
 import { resolveColumns, parseTrackerRow } from './tracker-parse.mjs';
+import { localToday } from './lib/local-today.mjs';
 import {
   parseFollowups,
   parseAppliedDate,
@@ -243,7 +244,12 @@ export function resolveDefaultSilenceWindow(rootDir = CAREER_OPS) {
 
 // --- today() — injectable for deterministic tests ---
 export function today() {
-  return new Date(new Date().toISOString().split('T')[0]);
+  // LOCAL calendar day, UTC midnight anchor. toISOString() gives the UTC DAY,
+  // so west of Greenwich an evening run answered "today" with tomorrow and
+  // every age in the report came out one day high (#3070). Only WHICH day
+  // this is moves; parseDate() still anchors at UTC midnight, so the
+  // arithmetic downstream is unchanged.
+  return new Date(localToday());
 }
 
 function resolveNow(now) {
