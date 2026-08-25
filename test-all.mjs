@@ -14497,6 +14497,7 @@ try {
   else fail('plugin SYSTEM paths not fully registered in update-system.mjs');
   if (["'config/plugins.yml'", "'plugins.local/'"].every(s => upd.includes(s))) pass('config/plugins.yml + plugins.local/ registered as USER paths (never auto-updated)');
   else fail('plugin USER paths not registered in update-system.mjs');
+
 } catch (e) {
   console.warn = __origWarn;
   fail(`plugin engine tests crashed: ${e.message}`);
