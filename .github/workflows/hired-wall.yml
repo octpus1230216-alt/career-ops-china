@@ -49,13 +49,19 @@ jobs:
               const m = body.match(re);
               return m ? m[1].trim().replace(/^_No response_$/, '') : '';
             };
-            // Permission is the hard gate: the checked box, not the label.
-            if (!/\[[xX]\] I'm happy for this story to appear publicly/.test(body)) {
+            // Permission is the hard gate: the checked box, not the label. Both
+            // template generations count — the pre-wall wording already granted
+            // README + release-notes featuring, which is what the wall is.
+            if (!/\[[xX]\] I'm (happy for this story to appear publicly|okay with my story being featured)/.test(body)) {
               core.setFailed('Permission checkbox is not checked — not adding to the wall. Ask in the thread.');
               return;
             }
             const anonRaw = section('How should we show you on the wall\\?');
-            const level = /handle/.test(anonRaw) ? 'handle' : /count me/.test(anonRaw) ? 'count' : 'role';
+            // No anonymity section only happens on old-template issues. Someone
+            // who posted a public celebration under their own handle and checked
+            // the featuring box gets full credit — the dropdown exists so people
+            // can choose LESS at submission time, not as a hoop toward more.
+            const level = /count me/.test(anonRaw) ? 'count' : /no handle/.test(anonRaw) ? 'role' : 'handle';
             const role = section('What role did you land\\?');
             const geo = section('Where \\(optional\\)');
             const weeksRaw = section('Time from first scan to offer');
