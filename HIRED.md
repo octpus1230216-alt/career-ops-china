@@ -15,6 +15,13 @@ nothing leaves your machine until you press Submit yourself).
 
 <!-- ENTRIES -->
 
+<!-- hire n=2 level=handle handle=amusto role="AI Solutions Technical Lead" weeks=4 link="https://github.com/santifer/career-ops/issues/3376" -->
+### Hire #2
+
+> It was essential in how I was able to focus on what was interview worthy. It also helped me understand that it was time to start punching above my weight.
+
+<a href="https://github.com/amusto"><img src="https://github.com/amusto.png?size=64" width="28" height="28" align="top" alt="@amusto"> **@amusto**</a> · AI Solutions Technical Lead · 4 weeks · [story →](https://github.com/santifer/career-ops/issues/3376)
+
 <!-- hire n=1 level=handle handle=santifer role="Head of Applied AI" geo="Spain" link="https://santifer.io/career-ops-system" -->
 ### Hire #1
 
