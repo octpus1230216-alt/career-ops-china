@@ -28,7 +28,7 @@
   <a href="HIRED.md"><img src="docs/hired-wall.svg" alt="The three most recent hired stories" width="800"></a>
 </p>
 
-<p align="center"><sub>Every count is a public story you can <a href="HIRED.md">audit →</a> · DMs don't count, the wall does.</sub></p>
+<p align="center"><sub>Every count is a public story you can <a href="HIRED.md">audit →</a> · every one of them started where you are now.</sub></p>
 
 <p align="center">
   <a href="https://trendshift.io/repositories/25195" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/25195" alt="santifer%2Fcareer-ops | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
