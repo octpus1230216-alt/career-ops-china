@@ -4269,7 +4269,13 @@ try {
     process.env.CAREER_OPS_PIPELINE_LOCK_RETRY_MS = '20';
     const held = await acquirePipelineLock(pipelinePath);
     try {
-      await appendToPipeline([{ url: 'https://jobs.example.com/1', company: 'Acme', title: 'Engineer' }]);
+      // Explicit fixture path: appendToPipeline's default is anchored to
+      // CAREER_OPS_ROOT at module load, so the chdir above no longer aims it
+      // at this fixture the way the old cwd-relative default did.
+      await appendToPipeline(
+        [{ url: 'https://jobs.example.com/1', company: 'Acme', title: 'Engineer' }],
+        { pipelinePath },
+      );
       fail('appendToPipeline() proceeded while another holder had the pipeline lock — no shared exclusion');
     } catch (e) {
       if (e instanceof LockTimeoutError) pass('appendToPipeline() shares pipeline-lock.mjs — correctly blocked on a lock held elsewhere (LockTimeoutError)');
@@ -4345,7 +4351,14 @@ try {
     );
     process.chdir(fixtureRoot);
     const { loadSeenUrls } = await import(pathToFileURL(join(ROOT, 'scan.mjs')).href);
-    const { seen } = loadSeenUrls();
+    // Explicit fixture paths: scan.mjs's defaults are anchored to
+    // CAREER_OPS_ROOT (frozen at module load), so the chdir above no longer
+    // retargets them the way the old cwd-relative string defaults allowed.
+    const { seen } = loadSeenUrls({}, {
+      scanHistoryPath: join(fixtureRoot, 'data', 'scan-history.tsv'),
+      pipelinePath: join(fixtureRoot, 'data', 'pipeline.md'),
+      applicationsPath: join(fixtureRoot, 'data', 'applications.md'),
+    });
     if (seen.has(normalizeUrlForDedup(bare)) && seen.has(normalizeUrlForDedup(withLang))) {
       pass('scan.mjs loadSeenUrls dedups a history row against a cosmetic query-suffix variant (#2065)');
     } else {
@@ -8424,6 +8437,9 @@ try {
       // ...and tracker-utils imports the shared lock-contention helpers
       // (#2777 fix), so the fixture carries that import too.
       copyFileSync(join(ROOT, 'pipeline-lock.mjs'), join(e2eTmp, 'pipeline-lock.mjs'));
+      // ...and followup-cadence resolves user-layer paths via path-resolver.mjs
+      // (CAREER_OPS_ROOT), so the fixture carries that too.
+      copyFileSync(join(ROOT, 'path-resolver.mjs'), join(e2eTmp, 'path-resolver.mjs'));
       // ...and followup-cadence now resolves "today" as the LOCAL calendar day
       // via lib/local-today.mjs (#3070), so the fixture carries that too.
       mkdirSync(join(e2eTmp, 'lib'), { recursive: true });
