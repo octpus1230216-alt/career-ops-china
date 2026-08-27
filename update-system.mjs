@@ -199,6 +199,8 @@ const SYSTEM_PATHS = [
   'cv-sync-check.mjs',
   'verify-cv-facts.mjs',
   'update-system.mjs',
+  'path-resolver.mjs',
+
   'reserve-report-num.mjs',
   'scan.mjs',
   'pipeline-lock.mjs',
