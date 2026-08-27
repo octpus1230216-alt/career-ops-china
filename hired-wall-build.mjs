@@ -175,7 +175,7 @@ export async function buildSvg(entries, opts = {}) {
 ${quote.map((l, k) => `<text x="${x + 34}" y="${44 + k * 19}" fill="#e6edf3" font-size="13" font-style="italic">${esc(l)}</text>`).join('\n')}
 ${avatar
     ? `<clipPath id="av${i}"><circle cx="${x + 29}" cy="${H - 52}" r="13"/></clipPath><image href="${avatar}" x="${x + 16}" y="${H - 65}" width="26" height="26" clip-path="url(#av${i})"/>`
-    : `<circle cx="${x + 29}" cy="${H - 52}" r="13" fill="#30363d"/><text x="${x + 29}" y="${H - 47}" text-anchor="middle" fill="#8b949e" font-size="12" font-weight="800">?</text>`}
+    : `<clipPath id="an${i}"><circle cx="${x + 29}" cy="${H - 52}" r="13"/></clipPath><circle cx="${x + 29}" cy="${H - 52}" r="13" fill="#30363d"/><g clip-path="url(#an${i})" fill="#8b949e"><circle cx="${x + 29}" cy="${H - 56}" r="4.5"/><path d="M ${x + 21} ${H - 39} a 8 8 0 0 1 16 0 z"/></g>`}
 <text x="${x + 50}" y="${H - 56}" fill="#c9d1d9" font-size="12.5" font-weight="700">${esc(who)}</text>
 <text x="${x + 50}" y="${H - 41}" fill="#8b949e" font-size="11">${esc(sub)}</text>
 <text x="${x + 16}" y="${H - 20}" fill="#DD7627" font-size="10.5" font-weight="800" letter-spacing="0.6">HIRE #${e.n}</text>

@@ -66,7 +66,11 @@ jobs:
             const sector = section('Company type');
             const geo = section('Where \\(optional\\)');
             const weeksRaw = section('Time from first scan to offer');
-            const weeks = (weeksRaw.match(/(\d+)\s*week/i) || [])[1] || '';
+            // "N weeks" verbatim; "N months" folds to weeks (×4) so the card's
+            // one unit stays honest-ish rather than the field going blank.
+            const wm = weeksRaw.match(/(\d+)\s*week/i);
+            const mm = weeksRaw.match(/(\d+)\s*month/i);
+            const weeks = wm ? wm[1] : (mm ? String(Number(mm[1]) * 4) : '');
             // The story quote: first sentence(s) of their story, clamped. The
             // full story stays in their issue; the card carries the hook.
             const story = section('Your story').replace(/\s+/g, ' ').slice(0, 180);
