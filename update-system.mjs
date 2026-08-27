@@ -72,6 +72,7 @@ const SYSTEM_PATHS = [
   'voice-dna.template.md',
   'modes/oferta.md',
   'modes/pdf.md',
+  'modes/ats.md',
   'modes/text.md',
   'modes/pdf/',
   'modes/cover.md',
@@ -198,6 +199,7 @@ const SYSTEM_PATHS = [
   'normalize-statuses.mjs',
   'cv-sync-check.mjs',
   'verify-cv-facts.mjs',
+  'verify-ats.mjs',
   'update-system.mjs',
   'path-resolver.mjs',
 
