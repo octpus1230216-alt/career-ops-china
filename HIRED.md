@@ -15,6 +15,13 @@ nothing leaves your machine until you press Submit yourself).
 
 <!-- ENTRIES -->
 
+<!-- hire n=7 level=handle handle=logumani2112 role="Backend Developer (.NET)" sector="IT Services Company" weeks=4 link="https://github.com/santifer/career-ops/issues/440" -->
+### Hire #7
+
+> I used career-ops to track and evaluate multiple job opportunities effectively. The A-F evaluation scoring helped me focus on the most relevant roles instead of applying randomly.
+
+<a href="https://github.com/logumani2112"><img src="https://github.com/logumani2112.png?size=64" width="28" height="28" align="top" alt="@logumani2112"> **@logumani2112**</a> · Backend Developer (.NET) · 4 weeks · [story →](https://github.com/santifer/career-ops/issues/440)
+
 <!-- hire n=6 level=handle handle=FReptar0 role="Software Engineer – Full Stack (payments) — México" sector="Fintech startup" link="https://github.com/santifer/career-ops/issues/3394" -->
 ### Hire #6
 
