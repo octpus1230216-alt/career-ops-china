@@ -343,6 +343,29 @@ const thresholdOut = execFileSync('node', [scriptPath, '--min-threshold', '3'], 
 const thresholdJson = JSON.parse(thresholdOut);
 eq('--min-threshold sets minThreshold in metadata', thresholdJson.metadata.minThreshold, 3);
 
+
+// --- #2982: an unusable --min-threshold must not become the threshold -------
+//
+// This file had NO shape check, so unlike detect-reposts.mjs it did not even
+// fall back: a 21-digit value was ACCEPTED and reported as "minThreshold":
+// 1e+21 — the "metadata reports a value that is not the one in effect" failure
+// detect-reposts documents isSafeInteger as existing to prevent.
+for (const bad of ['abc', '-5', '3.5', '7abc', '999999999999999999999', '9007199254740993']) {
+  const out = execFileSync('node', [scriptPath, '--min-threshold', bad], {
+    encoding: 'utf-8', timeout: 10000, cwd: dirname(scriptPath),
+  });
+  eq(`--min-threshold ${bad} falls back to 1`, JSON.parse(out).metadata.minThreshold, 1);
+}
+
+// The guard must not swallow real values, including the 0 that means
+// "report every company" and the largest integer that is still exact.
+for (const [good, want] of [['0', 0], ['7', 7], ['9007199254740991', 9007199254740991]]) {
+  const out = execFileSync('node', [scriptPath, '--min-threshold', good], {
+    encoding: 'utf-8', timeout: 10000, cwd: dirname(scriptPath),
+  });
+  eq(`--min-threshold ${good} is honoured`, JSON.parse(out).metadata.minThreshold, want);
+}
+
 const badThresholdOut = execFileSync('node', [scriptPath, '--min-threshold', 'abc'], {
   encoding: 'utf-8', timeout: 10000,
   cwd: dirname(scriptPath),
@@ -355,6 +378,27 @@ const summaryOut = execFileSync('node', [scriptPath, '--summary'], {
   cwd: dirname(scriptPath),
 });
 ok('--summary produces human-readable output', summaryOut.includes('Process Quality Signal'));
+
+// ============================================================================
+// 11. Documented example friction patterns (#2651) — regression coverage for
+// the illustrative examples in process-quality.mjs's header comment and
+// docs/SCRIPTS.md, confirming they parse cleanly through extractFriction.
+// This is not new parsing logic — just a guard against the doc examples
+// silently drifting out of sync with FRICTION_TAG's actual behavior.
+// ============================================================================
+console.log('\n--- 11. documented example friction patterns (#2651) ---');
+
+const documentedExamples = [
+  { reason: 'call scheduled for a rejection with no info beyond what email would convey' },
+  { reason: 'prescreen repeated info already given in a prior round' },
+  { reason: 'interview rescheduled 2+ times same week' },
+  { reason: 'no confirmation after stated timeline passed' },
+];
+
+for (const { reason } of documentedExamples) {
+  const notes = `[process-friction: ${reason}]`;
+  eq(`documented example parses: "${reason}"`, extractFriction({ Notes: notes }), { hasFriction: true, reason });
+}
 
 // ============================================================================
 // RESULTS

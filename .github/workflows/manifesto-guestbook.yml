@@ -16,11 +16,15 @@ jobs:
   post:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@v9
         env:
           WEBHOOK: ${{ secrets.DISCORD_MANIFESTO_WEBHOOK }}
         with:
           script: |
+            if (!process.env.WEBHOOK) {
+              core.info('DISCORD_MANIFESTO_WEBHOOK is not configured — skipping guestbook notification.');
+              return;
+            }
             const before = context.payload.before, after = context.payload.after;
             if (!before || /^0+$/.test(before)) { core.info('primer push — skip'); return; }
             // Diff de la oleada vía compare API (sin checkout)
