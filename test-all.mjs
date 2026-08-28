@@ -15337,6 +15337,41 @@ try {
         fail(`web pdf write-scope unit suites failed${killed ? ` (killed: ${killed})` : ''} (run: node --test ${webUnits.join(' ')})`);
       }
 
+      // Parity: everything web/package.json would run must be something we DO run.
+      // The block above only reads web/tests/lib, while web's own script is
+      // `node --test "tests/**/*.test.mjs"` — recursive. Today those agree (39 of
+      // 39 live in lib/), and nothing anywhere asserts that they keep agreeing.
+      // The day a suite lands in web/tests/routes/, web-ci.yml still runs it (its
+      // glob is recursive), so the failure this prevents is not "nobody runs it".
+      // It is narrower and worse: the instrument we MERGE by stops looking. A
+      // co-preview lot comes back green having skipped a suite that exists, while
+      // the PR's own informative CI is the only thing still watching it. Two
+      // measurements of the same fact, diverging in silence. Discovered on both
+      // sides, so this cannot rot into a stale list of its own.
+      try {
+        const webTestsRoot = join(ROOT, 'web', 'tests');
+        const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+          const p = join(dir, e.name);
+          if (e.isDirectory()) return walk(p);
+          return e.isFile() && e.name.endsWith('.test.mjs') ? [p] : [];
+        });
+        if (existsSync(webTestsRoot)) {
+          const gated = new Set(webUnits.map((f) => join(ROOT, f)));
+          const ungated = walk(webTestsRoot).filter((f) => !gated.has(f)).sort();
+          if (ungated.length === 0) {
+            pass(`every web suite is gated by the required check (${webUnits.length} discovered)`);
+          } else {
+            fail(
+              `${ungated.length} web suite(s) run in web's own CI but NOT in this required check: ` +
+              `${ungated.map((f) => f.slice(ROOT.length + 1)).join(', ')} — ` +
+              `this section only reads web/tests/lib, so anything outside it gates nothing`,
+            );
+          }
+        }
+      } catch (err) {
+        fail(`web suite parity check could not run (${err.message}) — that is not the same as "they all match"`);
+      }
+
       if (invocation && prompts) {
         const { claudeCliArgs, argValue, toolNames, grantsWriteCapability, WRITE_CAPABLE_TOOLS } = invocation;
         const pdfArgs = claudeCliArgs({ kind: 'pdf', prompt: 'freeze-probe' });
