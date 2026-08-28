@@ -283,6 +283,23 @@ console.log('\n2. Script execution (graceful on empty data)');
 // headroom.
 const SLOW_SCRIPT_WARN_FRACTION = 0.75;
 
+/**
+ * Whether a failed run died with an UNCAUGHT exception rather than exiting.
+ *
+ * The two are not the same outcome and only one of them is ever "expected".
+ * Node prints an uncaught error as `SomeError: message` at the start of a line
+ * followed by a stack; a script reporting its own problem and exiting non-zero
+ * prints neither. Both parts are required, so a script whose own diagnostic
+ * happens to start with "Error: " is not mistaken for a crash.
+ *
+ * @param {{stderr?: string}|null} failure
+ * @returns {boolean}
+ */
+function crashedBeforeRunning(failure) {
+  const stderr = String(failure?.stderr ?? '');
+  return /^[A-Za-z]*Error(?: \[[^\]]+\])?: /m.test(stderr) && /\n\s+at /.test(stderr);
+}
+
 const scripts = [
   { name: 'cv-sync-check.mjs', expectExit: 1, allowFail: true }, // fails without cv.md (normal in repo)
   { name: 'verify-pipeline.mjs', expectExit: 0 },
@@ -479,8 +496,16 @@ try {
     }
     if (result !== null) {
       pass(`${name} runs OK`);
-    } else if (allowFail) {
+    } else if (allowFail && !crashedBeforeRunning(lastRunFailure())) {
       warn(`${name} exited with error (expected without user data)`);
+    } else if (allowFail) {
+      // allowFail says "a non-zero exit is expected here", never "any outcome
+      // is fine". A script that dies with an uncaught exception did not run at
+      // all, and reporting that as the expected failure is how #3440 sat in
+      // main: cv-sync-check.mjs threw a ReferenceError at module scope, exited
+      // 1 like a missing cv.md, and the suite printed the reassuring warning
+      // for a script that never reached a single check.
+      fail(`${name} crashed before running — allowFail covers an expected exit, not an uncaught error${formatRunFailure()}`);
     } else {
       // Include the child's exit status and streams. Without them a CI-only
       // failure arrives as a bare `<name> crashed`: no stack, no assertion
