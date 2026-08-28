@@ -4599,6 +4599,19 @@ if (
   fail('scan.md missing local_parser_ok skip rules for agent scan');
 }
 
+// #2551's fix landed in modes/pipeline.md only, so modes/scan.md kept ordering parallel
+// Playwright batches at Level 1 — the highest-volume browser-backed step (#3366). The
+// marker assertion is per-file for that reason: a rule that holds in one mode file and
+// not in another is exactly what went unnoticed.
+if (
+  scanMode.includes('**Level 1 — Playwright Scan** (sequential — NEVER parallel Playwright)') &&
+  !scanMode.includes('**Level 1 — Playwright Scan** (parallel')
+) {
+  pass('scan.md Level 1 runs Playwright sequentially, matching the shared-session rule (#3366)');
+} else {
+  fail('scan.md Level 1 still orders parallel Playwright batches, contradicting pipeline.md and _shared.md (#3366)');
+}
+
 // Guard against scan.md's manual-parse conventions drifting from what providers/*.mjs
 // emit and scan.mjs's filters consume (location/salary/description). We assert the two
 // most specific, consumed-field tokens: Ashby `secondaryLocations` (location_filter) and
