@@ -37,6 +37,7 @@ const SCRIPTS = [
   ['linkedin-join.mjs', '--csvv'],
   ['linkedin-join.mjs', '--sinse'],
   ['application-artifacts.mjs', '--reprot'],
+  ['clean-markers.mjs', '--dryrun'],
 ];
 
 for (const [script, typo] of SCRIPTS) {
@@ -91,6 +92,39 @@ test('application-artifacts.mjs --help --bogus still errors', () => {
 test('application-artifacts.mjs --help wins over the missing-required-args error', () => {
   const r = runScript('application-artifacts.mjs', '--help');
   assert.doesNotMatch(r.all, /Unknown option/i, '--help was still treated as an unrecognized option');
+});
+
+
+test('clean-markers.mjs --help exits 0 and prints usage', () => {
+  const r = runScript('clean-markers.mjs', '--help');
+  assert.equal(r.status, 0, `clean-markers.mjs --help exited ${r.status}, want 0`);
+  assert.match(r.all, /Usage:/i, 'clean-markers.mjs --help printed no usage block');
+  assert.doesNotMatch(r.all, /not found/i, '--help was still read as a filename');
+});
+
+test('clean-markers.mjs -h exits 0 and prints usage', () => {
+  const r = runScript('clean-markers.mjs', '-h');
+  assert.equal(r.status, 0, `clean-markers.mjs -h exited ${r.status}, want 0`);
+  assert.match(r.all, /Usage:/i, 'clean-markers.mjs -h printed no usage block');
+});
+
+test('clean-markers.mjs --help --bogus still errors', () => {
+  const r = runScript('clean-markers.mjs', '--help', '--bogus');
+  assert.equal(r.status, 1, `clean-markers.mjs --help --bogus exited ${r.status}, want 1`);
+  assert.match(r.all, /unrecognized flag/i);
+});
+
+// Exit 2 means no files were given and exit 1 means a file failed the audit.
+// A pre-send gate needs both codes to stay distinct.
+test('clean-markers.mjs still exits 2 with usage when given no files', () => {
+  const r = runScript('clean-markers.mjs');
+  assert.equal(r.status, 2, `no-args exited ${r.status}, want 2`);
+  assert.match(r.all, /Usage:/i);
+});
+
+test('clean-markers.mjs still accepts --ascii as a known flag', () => {
+  const r = runScript('clean-markers.mjs', 'clean', '--ascii', join(tmpdir(), 'career-ops-no-such-file.md'));
+  assert.doesNotMatch(r.all, /unrecognized flag/i, '--ascii must not be rejected as unrecognized');
 });
 
 test('fix-slugs rejects unknown flags before checking or reading portals file', () => {
