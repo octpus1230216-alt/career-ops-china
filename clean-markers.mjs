@@ -87,12 +87,11 @@ const USAGE = `Usage:
   node clean-markers.mjs audit <file...>            # report only, never modifies
   node clean-markers.mjs clean <file...>            # strip markers, then report
   node clean-markers.mjs clean --ascii <file...>    # also force plain-ASCII punctuation
-  node clean-markers.mjs audit -- -draft.md         # -- ends the flags, so a dash-leading path is still a path
+  node clean-markers.mjs audit -- -draft.md         # -- ends the flags, for a path starting with a dash
   node clean-markers.mjs --help                     # print this usage block and exit`;
 
 const argv = process.argv.slice(2);
-// Everything after `--` is a path, so validate only what precedes it. Without
-// this a file named -draft.md reads as an unrecognized flag and cannot be passed.
+// Everything after `--` is a path, so a file named -draft.md is not read as a flag.
 const endOfOptions = argv.indexOf('--');
 validateFlags(endOfOptions === -1 ? argv : argv.slice(0, endOfOptions), KNOWN_FLAGS, USAGE);
 const mode = argv[0]==='clean' ? 'clean' : 'audit';

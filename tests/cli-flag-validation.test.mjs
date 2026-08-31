@@ -127,18 +127,20 @@ test('clean-markers.mjs still accepts --ascii as a known flag', () => {
   assert.doesNotMatch(r.all, /unrecognized flag/i, '--ascii must not be rejected as unrecognized');
 });
 
-// `--` ends the flags, so a path that starts with a dash is still a path. Without
-// it validateFlags reads -draft.md as an unrecognized flag and the file cannot be
-// audited at all.
+// The argument has to start with a dash for this to test anything, so the child
+// runs inside the fixture dir and gets the bare relative name. An absolute path
+// would begin with a slash and never reach the flag check.
 test('clean-markers.mjs audits a dash-leading path after --', () => {
   const dir = mkdtempSync(join(tmpdir(), 'career-ops-clean-markers-'));
   try {
-    const dashPath = join(dir, '-draft.md');
-    writeFileSync(dashPath, 'plain text\n');
-    const r = runScript('clean-markers.mjs', 'audit', '--', dashPath);
+    writeFileSync(join(dir, '-draft.md'), 'plain text\n');
+    const r = spawnSync(process.execPath, [join(ROOT, 'clean-markers.mjs'), 'audit', '--', '-draft.md'], {
+      cwd: dir, encoding: 'utf-8', timeout: 30_000,
+    });
+    const all = `${r.stdout ?? ''}${r.stderr ?? ''}`;
     assert.equal(r.status, 0, `dash-leading path exited ${r.status}, want 0`);
-    assert.doesNotMatch(r.all, /unrecognized flag/i, '-draft.md must not be read as a flag after --');
-    assert.match(r.all, /PASS/, 'the dash-leading path should have been audited');
+    assert.doesNotMatch(all, /unrecognized flag/i, '-draft.md must not be read as a flag after --');
+    assert.match(all, /PASS/, 'the dash-leading path should have been audited');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
