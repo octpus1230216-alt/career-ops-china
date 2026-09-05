@@ -421,7 +421,7 @@ Headless worker command per CLI:
 |--------|----------|
 | `archive-posting.mjs` | `{YYYY-MM-DD}_{company}_{role}.pdf` |
 | `archive-posting.mjs --report=N` | `{NNN}-{YYYY-MM-DD}_{company}_{role}.pdf` |
-| `plugins/apify/index.mjs`, `scan-apify.mjs` | `{company}-{role}-{sha1(url)[0:10]}.md` |
+| `plugins/apify/index.mjs` | `{company}-{role}-{sha1(url)[0:10]}.md` |
 | `scan` mode (manual save) | `{company}-{role-slug}.md` |
 
 **Prefer `--report=N` when archiving for a tracked row.** A capture named only from the date and the scraped company and role can be found again only by rebuilding that exact string, so it stops resolving the day after it is written — precisely when the posting has gone dead and the capture is the only remaining record. `jd-capture.mjs` looks captures up by report number instead, matching padded and unpadded prefixes (`064-`, `64-`, `01-`), and `outcome.mjs` uses it before falling back to re-archiving a live URL.
