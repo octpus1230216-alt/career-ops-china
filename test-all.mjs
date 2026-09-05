@@ -55,7 +55,7 @@ import { tmpdir } from 'os';
 import { promisify } from 'util';
 import { fileURLToPath, pathToFileURL } from 'url';
 import * as yaml from 'js-yaml';
-import { pass, fail, warn, run, lastRunFailure, formatRunFailure, fileExists, finish, ROOT, QUICK, NODE, DEFAULT_SCRIPT_TIMEOUT_MS, getBash, toBashPath, hermeticGitEnv } from './tests/helpers.mjs';
+import { pass, fail, warn, run, runAcrossUtcDay, lastRunFailure, formatRunFailure, fileExists, finish, ROOT, QUICK, NODE, DEFAULT_SCRIPT_TIMEOUT_MS, getBash, toBashPath, hermeticGitEnv } from './tests/helpers.mjs';
 import { flagValue, hasFlag } from './lib/cli-flags.mjs';
 import { collectMjsFiles, isNestedCheckout } from './lib/mjs-files.mjs';
 
@@ -6868,8 +6868,6 @@ if (fileExists('VERSION')) {
 
 console.log('\n12. archive-posting.mjs');
 
-const todayStr = new Date().toISOString().split('T')[0];
-
 // dry-run: URL-based company detection across each supported ATS
 for (const [url, expected] of [
   ['https://boards.greenhouse.io/openai/jobs/123', 'openai'],
@@ -6893,9 +6891,13 @@ overrideOut?.includes('Acme') && overrideOut?.includes('staff-engineer')
   ? pass('dry-run: --company and --role overrides respected')
   : fail('dry-run: --company / --role overrides not reflected in output');
 
-// dry-run: output always contains a local:jds/ reference and today's date
-const refOut = run(NODE, ['archive-posting.mjs', '--dry-run', 'https://boards.greenhouse.io/openai/jobs/123']);
-refOut?.includes('local:jds/') && refOut?.includes(todayStr)
+// dry-run: output always contains a local:jds/ reference and today's date.
+// The date the child prints is its own clock read, so it is compared against
+// the day(s) spanning the call rather than one captured up-section — see
+// runAcrossUtcDay() for why a single capture fails a run that crosses
+// midnight UTC (#3816).
+const { out: refOut, days: refDays } = runAcrossUtcDay(NODE, ['archive-posting.mjs', '--dry-run', 'https://boards.greenhouse.io/openai/jobs/123']);
+refOut?.includes('local:jds/') && refDays.some((day) => refOut?.includes(day))
   ? pass('dry-run: local:jds/ reference and date emitted')
   : fail('dry-run: reference or date missing from output');
 
@@ -6943,8 +6945,8 @@ reportSpaceOut?.includes('jds/042-') && reportSpaceOut?.toLowerCase().includes('
   : fail('--report N: swallowed the URL or dropped the report number');
 
 // omitting --report leaves the historical filename shape untouched
-const noReportOut = run(NODE, ['archive-posting.mjs', '--dry-run', 'https://boards.greenhouse.io/openai/jobs/123']);
-noReportOut?.includes(`jds/${todayStr}_`)
+const { out: noReportOut, days: noReportDays } = runAcrossUtcDay(NODE, ['archive-posting.mjs', '--dry-run', 'https://boards.greenhouse.io/openai/jobs/123']);
+noReportDays.some((day) => noReportOut?.includes(`jds/${day}_`))
   ? pass('no --report: filename shape unchanged')
   : fail('no --report: filename shape regressed');
 
