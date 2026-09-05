@@ -300,6 +300,7 @@ const SYSTEM_PATHS = [
   'liveness-api.mjs',
   'liveness-browser.mjs',
   'browser-extract.mjs',
+  'fetch-jd.mjs',
   'analyze-patterns.mjs',
   'calibrate.mjs',
   'upskill.mjs',
