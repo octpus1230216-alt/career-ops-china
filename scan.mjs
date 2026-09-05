@@ -3183,14 +3183,22 @@ async function main() {
         // candidate: two candidates with DIFFERENT cities must stay distinct.
         // `key === baseKey` whenever the flag is off, and the index is empty in
         // that case, so the default path is unchanged.
+        //
+        // An aggregator feed (portals.yml `aggregator: true`) names itself as
+        // the company, so two same-titled posts are two employers' jobs: only
+        // the URL dedups there, and the key is null.
         const baseKey = companyRoleDedupKey(job.company, job.title, canonicalizeCompany);
-        const key = dedupIncludeLocation
-          ? companyRoleDedupKey(job.company, job.title, canonicalizeCompany, job.location)
-          : baseKey;
+        const key = company.aggregator === true
+          ? null
+          : (dedupIncludeLocation
+            ? companyRoleDedupKey(job.company, job.title, canonicalizeCompany, job.location)
+            : baseKey);
         if (
-          seenCompanyRoles.has(key) ||
-          seenCompanyRoles.has(baseKey) ||
-          (key === baseKey && seenCompanyRoleBases.has(baseKey))
+          key !== null && (
+            seenCompanyRoles.has(key) ||
+            seenCompanyRoles.has(baseKey) ||
+            (key === baseKey && seenCompanyRoleBases.has(baseKey))
+          )
         ) {
           totalDupes++;
           continue;
@@ -3209,8 +3217,10 @@ async function main() {
         // city THIS run also suppresses a locationless twin later in the run —
         // not only across runs.
         seenUrls.add(dedupUrl);
-        seenCompanyRoles.add(key);
-        if (key !== baseKey) seenCompanyRoleBases.add(baseKey);
+        if (key !== null) {
+          seenCompanyRoles.add(key);
+          if (key !== baseKey) seenCompanyRoleBases.add(baseKey);
+        }
         // Tag with the company's careers domain so verify can offer a 404/410
         // rediscovery fallback. A null domain (no careers_url) marks the offer
         // as broad-discovery — ineligible for the fallback, per the issue scope.
