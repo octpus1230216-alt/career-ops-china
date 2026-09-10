@@ -167,3 +167,4 @@ public commit with a stated reason.
 - @nastya-uiux | Anastasiya Dvindenko | 2026-09-08 | "I want hiring to value thoughtful design, real skills, and human potential." | id:202688373 | src:https://github.com/career-ops-hq/career-ops/discussions/4031 | n:119
 - @E-Lucid-At0r | Ashwin Ravikumar | 2026-09-09 | id:95267475 | src:https://github.com/career-ops-hq/career-ops/discussions/4044 | n:120
 - @7datawin-arch | 2026-09-10 | id:292077187 | src:https://github.com/career-ops-hq/career-ops/discussions/4061 | n:121
+- @colincomstock | Colin Comstock | 2026-09-10 | id:95597475 | src:https://github.com/career-ops-hq/career-ops/discussions/4063 | n:122
