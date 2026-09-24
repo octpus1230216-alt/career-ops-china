@@ -574,16 +574,15 @@ append_recovery_record() {
 # duplicate run, on a path that by construction only fires when something
 # already went wrong.
 #
-# Terminal set mirrors the pending-selection guard in main() exactly. Keep
-# the two in sync: adding a terminal status there without adding it here
-# reopens this rollback for that status.
+# Completed and human-held states must not be rolled back by stale records.
+# Keep these protected states in sync with the pending-selection guard.
 recovery_record_is_superseded() {
   local current="$1"
-  [[ "$current" == "completed" || "$current" == "skipped" ]]
+  [[ "$current" == "completed" || "$current" == "skipped" || "$current" == "needs_confirmation" ]]
 }
 
 # Merge one recovery record, but only into a row that has not already reached
-# a terminal state. The status read happens INSIDE the lock deliberately: a
+# a completed or human-held state. The status read happens INSIDE the lock: a
 # check-then-write gap would let a worker finish between the two and
 # reintroduce the same rollback. get_status is a lock-free reader (plain awk
 # over $STATE_FILE), so calling it here does not re-enter the non-reentrant
@@ -677,7 +676,9 @@ reconcile_recovery_records() {
 # and, if it still fails, falls back to append_recovery_record so the
 # transition is never actually lost (only delayed until the next run's
 # reconcile step), then logs a clear warning and returns non-zero so the
-# CALLER can still decide whether to skip side effects that assumed success
+# CALLER can still decide whether to skip side effects that assumed success.
+# Return 1 means the transition is durable in recovery; 2 means neither write
+# succeeded, so a human gate must stop and surface the persistence failure
 # (found under --parallel 5 on Git Bash/Windows: ~47 of 50 jobs silently
 # dropped in one run from exactly this before the retry+recovery-log fix).
 update_state_retrying() {
@@ -697,6 +698,7 @@ update_state_retrying() {
     echo "    ⚠️  State update failed after $max_attempts attempts — offer id=$1 status=$3 recorded to $RECOVERY_DIR for reconciliation on next run." >&2
   else
     echo "    ❌ State update failed after $max_attempts attempts AND recovery-record write also failed — offer id=$1 status=$3 was NOT recorded anywhere. It will be retried as pending next run." >&2
+    return 2
   fi
   return 1
 }
@@ -1166,6 +1168,7 @@ process_offer() {
     # as status/error fixes both by construction -- there's only one place
     # left to look.
     local worker_failed_match="" worker_error_match="" score="-"
+    local parsed_status="" parsed_error="" parsed_score=""
     if [[ -n "$worker_result_json" ]]; then
       local parsed
       parsed=$(printf '%s' "$worker_result_json" | node -e '
@@ -1175,7 +1178,8 @@ process_offer() {
           try {
             const obj = JSON.parse(data);
             const status = typeof obj.status === "string" ? obj.status : "";
-            const error = typeof obj.error === "string" ? obj.error : "";
+            const message = status === "needs_confirmation" ? obj.question : obj.error;
+            const error = typeof message === "string" ? message.replace(/[\x00-\x1f\x7f]/g, " ") : "";
             const score = typeof obj.score === "number" ? String(obj.score) : "";
             process.stdout.write(status + "\x1f" + error + "\x1f" + score);
           } catch {
@@ -1199,6 +1203,52 @@ process_offer() {
           score="$parsed_score"
         fi
       fi
+    fi
+
+    # A human gate is not a failure or a successful evaluation (#4359).
+    # Keep it out of retries and release the unused report reservation.
+    if [[ "$parsed_status" == "needs_confirmation" ]]; then
+      local question="${parsed_error:-Which agency did this posting come through?}"
+      # A malformed/misattributed handoff stays held, never becomes retryable
+      # and never supplies an agency answer for a different posting.
+      if ! node -e '
+        const result = JSON.parse(process.argv[1]);
+        process.exit(result.reason === "agency_confirmation" &&
+          result.url === process.argv[2] && String(result.id) === process.argv[3] ? 0 : 1);
+      ' "$worker_result_json" "$url" "$id"; then
+        question="Invalid confirmation handoff identity/reason; parent must inspect the job log and ask for this URL"
+      fi
+      local tracker_artifact="$TRACKER_DIR/$id.tsv"
+      local -a report_artifacts=()
+      if [[ -n "$report_num" && "$report_num" != "-" ]]; then
+        shopt -s nullglob
+        report_artifacts=("$REPORTS_DIR/$report_num-"*.md)
+        shopt -u nullglob
+      fi
+      if [[ -f "$tracker_artifact" || ${#report_artifacts[@]} -gt 0 ]]; then
+        local quarantine_dir="$LOGS_DIR/quarantine"
+        mkdir -p "$quarantine_dir"
+        if [[ -f "$tracker_artifact" ]]; then
+          mv "$tracker_artifact" "$quarantine_dir/$id-tracker.tsv"
+        fi
+        local report_artifact
+        for report_artifact in ${report_artifacts[@]+"${report_artifacts[@]}"}; do
+          mv "$report_artifact" "$quarantine_dir/$id-${report_artifact##*/}"
+        done
+        question="Worker violated the confirmation hold by writing artifacts; inspect the quarantined tracker/report before answering"
+        update_state_retrying "$id" "$url" "needs_confirmation" "$started_at" "$completed_at" "-" "-" "$question" "$retries" || true
+        echo "    ERROR: confirmation hold produced artifacts; reservation kept and tracker merge skipped." >&2
+        return 2
+      fi
+      local hold_rc=0
+      update_state_retrying "$id" "$url" "needs_confirmation" "$started_at" "$completed_at" "-" "-" "$question" "$retries" || hold_rc=$?
+      release_report_num "$report_num"
+      echo "    Needs confirmation: $url — $question (resume in the parent session after an explicit answer)"
+      if (( hold_rc == 2 )); then
+        echo "    ERROR: confirmation hold could not be persisted; stop and repair state before rerunning this posting." >&2
+        return 2
+      fi
+      return 0
     fi
 
     if [[ -n "$worker_failed_match" ]]; then
@@ -1279,7 +1329,7 @@ print_summary() {
     return
   fi
 
-  local total=0 completed=0 skipped=0 failed=0 pending=0
+  local total=0 completed=0 skipped=0 failed=0 pending=0 needs_confirmation=0
   local score_sum=0 score_count=0
 
   while IFS=$'\t' read -r sid _ sstatus _ _ _ sscore _ _; do
@@ -1294,11 +1344,12 @@ print_summary() {
         ;;
       skipped) skipped=$((skipped + 1)) ;;
       failed) failed=$((failed + 1)) ;;
+      needs_confirmation) needs_confirmation=$((needs_confirmation + 1)) ;;
       *) pending=$((pending + 1)) ;;
     esac
   done < "$STATE_FILE"
 
-  echo "Total: $total | Completed: $completed | Skipped: $skipped | Failed: $failed | Pending: $pending"
+  echo "Total: $total | Completed: $completed | Skipped: $skipped | Failed: $failed | Pending: $pending | Needs confirmation: $needs_confirmation"
 
   if (( score_count > 0 )); then
     local avg
@@ -1321,7 +1372,7 @@ print_status_table() {
     return
   fi
 
-  local total=0 completed=0 processing=0 failed=0 pending=0 skipped=0 rate_limited=0 paused_rate_limit=0
+  local total=0 completed=0 processing=0 failed=0 pending=0 skipped=0 rate_limited=0 paused_rate_limit=0 needs_confirmation=0
   local score_sum=0 score_count=0
 
   # Read first line to skip header
@@ -1346,6 +1397,7 @@ print_status_table() {
         fi
         ;;
       processing) processing=$((processing + 1)) ;;
+      needs_confirmation) needs_confirmation=$((needs_confirmation + 1)) ;;
       failed) failed=$((failed + 1)) ;;
       skipped) skipped=$((skipped + 1)) ;;
       rate_limited) rate_limited=$((rate_limited + 1)) ;;
@@ -1355,7 +1407,7 @@ print_status_table() {
   done < "$STATE_FILE"
 
   echo "=== Batch Progress ==="
-  echo "Total: $total | Completed: $completed | Processing: $processing | Failed: $failed | Pending: $pending | Skipped: $skipped | Rate Limited: $rate_limited | Paused: $paused_rate_limit"
+  echo "Total: $total | Completed: $completed | Processing: $processing | Failed: $failed | Pending: $pending | Skipped: $skipped | Rate Limited: $rate_limited | Paused: $paused_rate_limit | Needs confirmation: $needs_confirmation"
   if (( score_count > 0 )); then
     local avg
     # LC_ALL=C: under e.g. a German locale awk formats "%.1f" as "4,5"
@@ -1366,8 +1418,8 @@ print_status_table() {
   echo ""
 
   # Format the per-job table:
-  # Columns: ID, Status, Report, Score, Target (URL or Error Message)
-  printf "%-4s | %-17s | %-6s | %-5s | %-40s\n" "ID" "Status" "Report" "Score" "URL / Error"
+  # Columns: ID, Status, Report, Score, Target (URL or explanation)
+  printf "%-4s | %-17s | %-6s | %-5s | %-40s\n" "ID" "Status" "Report" "Score" "URL / Detail"
   printf "%-4s+%-19s+%-8s+%-7s+%-42s\n" "----" "-------------------" "--------" "-------" "------------------------------------------"
 
   header=true
@@ -1382,11 +1434,13 @@ print_status_table() {
     serror="${serror%$'\r'}"
     sreport="${sreport%$'\r'}"
     local target="$surl"
-    if [[ "$sstatus" == "failed" && -n "$serror" && "$serror" != "-" ]]; then
+    if [[ "$sstatus" == "needs_confirmation" ]]; then
+      target="$surl — Needs confirmation: $serror"
+    elif [[ "$sstatus" == "failed" && -n "$serror" && "$serror" != "-" ]]; then
       target="Error: $serror"
     fi
     # Trim target to fit nicely (e.g. 50 chars)
-    if (( ${#target} > 50 )); then
+    if [[ "$sstatus" != "needs_confirmation" ]] && (( ${#target} > 50 )); then
       target="${target:0:47}..."
     fi
     printf "%-4s | %-17s | %-6s | %-5s | %-50s\n" "$sid" "$sstatus" "$sreport" "$sscore" "$target"
@@ -1500,6 +1554,12 @@ main() {
     local status
     status=$(get_status "$id")
 
+    # No command-line retry flag constitutes a user's agency answer.
+    if [[ "$status" == "needs_confirmation" ]]; then
+      echo "HOLD #$id: needs confirmation in the parent session ($url)"
+      continue
+    fi
+
     if [[ "$RESUME_PAUSED" == "true" ]]; then
       if [[ "$status" != "paused_rate_limit" ]]; then
         continue
@@ -1583,6 +1643,7 @@ main() {
   else
     # Parallel processing with job control
     local running=0
+    local parallel_rc=0 worker_rc=0
     local -a pids=()
     local -a pid_ids=()
 
@@ -1597,15 +1658,22 @@ main() {
         # Wait for any child to finish
         for j in "${!pids[@]}"; do
           if ! kill -0 "${pids[$j]}" 2>/dev/null; then
-            wait "${pids[$j]}" 2>/dev/null || true
+            worker_rc=0
+            wait "${pids[$j]}" 2>/dev/null || worker_rc=$?
+            if (( worker_rc != 0 )); then
+              parallel_rc=$worker_rc
+            fi
             unset 'pids[j]'
             unset 'pid_ids[j]'
             running=$((running - 1))
           fi
         done
         # Compact arrays
-        pids=("${pids[@]}")
-        pid_ids=("${pid_ids[@]}")
+        pids=(${pids[@]+"${pids[@]}"})
+        pid_ids=(${pid_ids[@]+"${pid_ids[@]}"})
+        if (( parallel_rc != 0 )); then
+          break
+        fi
         if [[ "$BATCH_PAUSED" == "true" || -f "$PAUSE_FILE" ]]; then
           echo "=== Batch paused: session/rate limit reached. Waiting for running workers, not scheduling new offers. ==="
           break
@@ -1613,7 +1681,7 @@ main() {
         sleep 1
       done
 
-      if [[ "$BATCH_PAUSED" == "true" || -f "$PAUSE_FILE" ]]; then
+      if (( parallel_rc != 0 )) || [[ "$BATCH_PAUSED" == "true" || -f "$PAUSE_FILE" ]]; then
         break
       fi
 
@@ -1625,9 +1693,17 @@ main() {
     done
 
     # Wait for remaining workers
-    for pid in "${pids[@]}"; do
-      wait "$pid" 2>/dev/null || true
+    for pid in ${pids[@]+"${pids[@]}"}; do
+      worker_rc=0
+      wait "$pid" 2>/dev/null || worker_rc=$?
+      if (( worker_rc != 0 )); then
+        parallel_rc=$worker_rc
+      fi
     done
+    if (( parallel_rc != 0 )); then
+      echo "ERROR: a parallel worker failed fatally; tracker merge skipped. Inspect the worker log and repair state before rerunning." >&2
+      return "$parallel_rc"
+    fi
   fi
 
   # Merge tracker additions
