@@ -108,6 +108,56 @@ function resolveMaxPages(entry) {
   return DEFAULT_MAX_PAGES;
 }
 
+// ── Dead-tenant detection ────────────────────────────────────────
+//
+// The CXS API's 422/401/403 bodies carry no marker of their own (a bare
+// `{"errorCode":"HTTP_422",...}`, identical whether the board is genuinely
+// gone or just hit a transient WAF blip), so raw status alone isn't safe to
+// hand to dead-boards.mjs — a spread sample of 1200 tenants (2026-09) found
+// HTTP 500 failures whose careers page loads fine (live tenant, unrelated
+// hiccup), and even 2 of 614 raw-422 tenants with a clean careers page.
+// Two signals held across a repeat pass days later, always the same result:
+// - 422, careers page bounces to `community.workday.com/maintenance-page`
+//   (612 of 614 raw 422s, ~99.7%).
+// - 401/403, careers page redirects to `*.myworkday.com/wday/drs/outage`
+//   ("Workday is currently unavailable") — this is a per-board signal, not a
+//   per-tenant one: a restricted/retired board on an otherwise-live tenant
+//   (other boards on the same tenant answering normally) still redirects here
+//   every time it's checked.
+// Only page-0's request is checked — a tenant that fails mid-pagination
+// already has this file's own transient/structural handling and isn't
+// touched here.
+const WORKDAY_MAINTENANCE_MARKER = 'community.workday.com/maintenance-page';
+const WORKDAY_OUTAGE_REDIRECT_RE = /^https:\/\/[a-z0-9.-]+\.myworkday\.com\/wday\/drs\/outage(?:[/?]|$)/i;
+const CONFIRMED_DEAD_API_STATUSES = new Set([422, 401, 403]);
+
+/**
+ * A page-0 CXS failure with one of these statuses is worth the one extra
+ * careers-page fetch to check for Workday's own dead-board signals. Errors
+ * are swallowed here (a failed probe proves nothing) — the caller rethrows
+ * the original error either way, this only decides whether to relabel it as
+ * a synthetic 404 so dead-boards.mjs's existing 404 path (shared with every
+ * other provider) picks it up.
+ */
+async function confirmDeadViaCareersPage(ep, ctx) {
+  try {
+    const body = await ctx.fetchText(ep.jobBase, {
+      redirect: 'manual',
+      headers: { 'user-agent': BROWSER_LIKE_USER_AGENT, 'accept-language': 'en-US,en;q=0.9' },
+    });
+    // Every confirmed case so far reaches the marker through the catch below
+    // (a non-2xx status) — this only guards the shape where a tenant serves
+    // it on a 200 instead. Safe to check unconditionally: a known-live tenant
+    // (tempus, 2026-09) does NOT carry this string on its 200 response, unlike
+    // the outage-page URL, which is boilerplate present on every Workday page
+    // regardless of health and is deliberately never checked on a 200 body.
+    return typeof body === 'string' && body.includes(WORKDAY_MAINTENANCE_MARKER);
+  } catch (err) {
+    if (err.status >= 300 && err.status < 400) return WORKDAY_OUTAGE_REDIRECT_RE.test(err.location || '');
+    return typeof err.body === 'string' && err.body.includes(WORKDAY_MAINTENANCE_MARKER);
+  }
+}
+
 // ── Facet split ───────────────────────────────────────────────────
 //
 // Workday's CXS backend refuses to paginate past offset 2000 on some tenants,
@@ -773,7 +823,17 @@ export default {
       return { jobs, total, facets, stopReason, clamped };
     };
 
-    const root = await runQuery({});
+    let root;
+    try {
+      root = await runQuery({});
+    } catch (err) {
+      if (CONFIRMED_DEAD_API_STATUSES.has(err.status) && await confirmDeadViaCareersPage(ep, ctx)) {
+        const notFound = new Error(`workday: ${entry.name} confirmed dead (maintenance page)`);
+        notFound.status = 404;
+        throw notFound;
+      }
+      throw err;
+    }
     const { total, stopReason } = root;
 
     // Set when the split ran out of depth, slices, or splittable facets with
