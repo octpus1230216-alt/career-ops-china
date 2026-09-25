@@ -88,8 +88,11 @@ function loadFailedReportNumbers(path) {
     const status = cols[2];
     const reportNum = cols[5];
     if (status === 'failed' && reportNum && reportNum !== '-') {
-      const n = parseInt(reportNum, 10);
-      if (!isNaN(n)) failed.add(n);
+      // Digits only, positive, safe: parseInt would accept "12abc" and
+      // 9007199254740992, and an unsafe number in the occupied set makes
+      // reserveReportNumbers throw "No safe report-number range remains".
+      const n = /^\d+$/.test(reportNum) ? Number(reportNum) : NaN;
+      if (Number.isSafeInteger(n) && n > 0) failed.add(n);
     }
   }
   return failed;
