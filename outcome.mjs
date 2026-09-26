@@ -37,6 +37,7 @@ import {
   resolveWorkspaceRoot,
 } from './tracker-utils.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
+import { localToday } from './lib/local-today.mjs';
 import { resolveOutcomeDir } from './lib/outcome-dir.mjs';
 import { parsePdfIndex } from './find.mjs';
 import { findCaptureForReport } from './jd-capture.mjs';
@@ -67,8 +68,17 @@ function slugify(text) {
     .slice(0, 60) || 'unknown';
 }
 
+// LOCAL calendar day, not the UTC one (#3070). This stamps the outcome journal
+// under data/outcomes/ — the `## Entry:` header and `**Date**:` — which
+// calibrate.mjs and funnel-velocity.mjs then read.
+//
+// tests/local-today-gates.test.mjs already covers assessment-log.mjs for
+// exactly this reason ("the date written into a user's assessments.tsv row").
+// This is the same kind of date, in an append-only file, and it was the UTC
+// one: an outcome recorded on a Sunday evening anywhere in the Americas was
+// journaled as Monday, moving it into the next week and the next funnel bucket.
 function today() {
-  return new Date().toISOString().split('T')[0];
+  return localToday();
 }
 
 
