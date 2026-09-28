@@ -159,7 +159,7 @@ const CLOSURE = {
   'generate-pdf.mjs': [
     'generate-pdf.mjs', 'path-resolver.mjs', 'tracker-utils.mjs', 'pipeline-lock.mjs',
     'tracker-parse.mjs', 'theme-style.mjs', 'lib/page-format.mjs', 'lib/is-main-module.mjs',
-    'cv-sections-core.mjs',
+    'cv-sections-core.mjs', 'cv-experience-order.mjs',
     'tracker-aliases.json',
   ],
 };
