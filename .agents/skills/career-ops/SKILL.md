@@ -8,7 +8,7 @@ description: >-
 arguments: mode
 user_invocable: true
 user-invocable: true
-argument-hint: "[scan | discover | deep | pdf | text | latex | latex-tex | cover | email | add | expand | eu-swe | oferta | ofertas | apply | batch | tracker | agent-inbox | pipeline | contacto | training | project | interview-prep | interview | interview/plan | interview/practice | interview/debrief | interview-redflag | patterns | offer-prep | titles | upskill | followup | reply-watch | outcome | update]"
+argument-hint: "[scan | discover | deep | pdf | text | latex | latex-tex | cover | email | add | expand | eu-swe | oferta | ofertas | apply | batch | tracker | agent-inbox | pipeline | contacto | training | project | interview-prep | interview | master-profile | interview/plan | interview/practice | interview/debrief | interview-redflag | patterns | offer-prep | titles | upskill | followup | reply-watch | outcome | update]"
 license: MIT
 ---
 
@@ -52,6 +52,7 @@ Determine the mode from `$mode`:
 | `deep` | `deep` |
 | `interview-prep` | `interview-prep` |
 | `interview` | `interview` |
+| `master-profile` | `master-profile` |
 | `eu-swe` | `regional/eu-swe` |
 | `eu-fintech` | `regional/eu-fintech` |
 | `interview/plan` | `interview/plan` |
@@ -135,6 +136,7 @@ Available commands:
   /career-ops deep      → Deep research prompt about company
   /career-ops interview-prep → Generate company-specific interview prep doc
   /career-ops interview    → Interactive profile/CV onboarding interview
+  /career-ops master-profile → Import, review, and validate your Master Career Profile
   /career-ops eu-swe    → Calibrate a European SWE application before CV/apply/interview
   /career-ops eu-fintech → Scan 21 EU fintech portals for Product Manager roles (zero-token)
   /career-ops interview/plan → Time-blocked prep plan for an upcoming interview
@@ -186,7 +188,7 @@ Applies to: `auto-pipeline`, `oferta`, `ofertas`, `pdf`, `text`, `contacto`, `ap
 
 Read `modes/_profile.md` (if exists) + `modes/_custom.md` (if exists) + `modes/{mode}.md`
 
-Applies to: `tracker`, `agent-inbox`, `deep`, `interview-prep`, `interview`, `regional/eu-swe`, `interview/plan`, `interview/practice`, `interview/debrief`, `latex`, `latex-tex`, `training`, `project`, `patterns`, `titles`, `upskill`, `followup`, `reply-watch`, `outcome`, `cover`, `email`, `add`, `offer-prep`, `discover`
+Applies to: `tracker`, `agent-inbox`, `deep`, `interview-prep`, `interview`, `master-profile`, `regional/eu-swe`, `interview/plan`, `interview/practice`, `interview/debrief`, `latex`, `latex-tex`, `training`, `project`, `patterns`, `titles`, `upskill`, `followup`, `reply-watch`, `outcome`, `cover`, `email`, `add`, `offer-prep`, `discover`
 
 ### Modes delegated to subagent
 
