@@ -57,7 +57,8 @@ Run `npm run jd:similarity -- {bundle-root}/jd/current.md {bundle-root}/jd/previ
     - If the rendered PDF exceeds its threshold, generation warns loudly with the actual and allowed page counts plus trimming guidance, then reports and indexes the unchanged PDF so existing longer-CV flows keep working.
     - Pass `--strict-pages` only when the user or market requires a hard limit. Strict overflow leaves the draft available for inspection but does not report or index it as successful; trim lower-priority content and rerun.
     - Generation fails when Work Experience is not newest-first, quoting the dates of the role that starts later than the one above it. Return to Step 17 with the roles in reverse-chronological order, rebuild the HTML, and re-run the fact gate before rendering; tailor through the summary, competencies, and bullet selection, never by moving roles. Pass `--allow-nonchronological`, which turns the failure into a warning, only when the user explicitly asks for a non-chronological CV.
-22. Report: PDF path, number of pages, keyword coverage %, and any skill gaps from Step 4 still unaddressed
+22. Verify ATS keyword coverage of the **tailored** CV against the role's evaluation report (when one exists): `node keyword-match.mjs "reports/{###}-{company-slug}-{YYYY-MM-DD}.md" --cv "{html-path}"`. Pass the report's full filename (e.g. `reports/008-acme-2026-09-28.md`), not the bare NNN that Step 21's `--report` takes, and keep both paths quoted. This text-extracts the HTML you just built and reports coverage %, present, thin, and missing keywords — the diagnostic for the document being sent. Surface any missing/thin keywords to the user (reformulate from real experience, never fabricate).
+23. Report: PDF path, number of pages, keyword coverage % (when Step 22 ran), and any skill gaps from Step 4 still unaddressed
 
 ## ATS Rules (clean parsing)
 

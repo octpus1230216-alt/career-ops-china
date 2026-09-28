@@ -329,6 +329,7 @@ const SYSTEM_PATHS = [
   'browser-extract.mjs',
   'fetch-jd.mjs',
   'analyze-patterns.mjs',
+  'keyword-match.mjs',
   'calibrate.mjs',
   'upskill.mjs',
   'skill-extract.mjs',

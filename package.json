@@ -46,6 +46,7 @@
     "tracker": "node tracker.mjs",
     "find": "node find.mjs",
     "patterns": "node analyze-patterns.mjs",
+    "keyword-match": "node keyword-match.mjs",
     "calibrate": "node calibrate.mjs",
     "upskill": "node upskill.mjs",
     "career-profile": "node career-profile.mjs",
