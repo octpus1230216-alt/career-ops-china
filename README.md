@@ -24,7 +24,7 @@ I was its first user. <strong>I got the job.</strong> Then I open-sourced it.
 
 <p align="center">
   Companies use AI to filter candidates. <strong>I just gave candidates AI to <em>choose</em> companies.</strong><br>
-  On your machine, it tells you which jobs are real, which ones fit, and <strong>never applies in your name.</strong>
+  On your machine, it tells you which jobs are real, which ones fit, and <strong>helps you apply in your name.</strong>
 </p>
 
 <p align="center">
