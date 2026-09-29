@@ -175,7 +175,11 @@ function markerFixture(script) {
   for (const file of CLOSURE[script]) copyFileSync(join(ROOT, file), join(codeRoot, file));
   // generate-pdf.mjs imports playwright at module scope, so without this the
   // child dies before it can print anything and the assertions say nothing.
-  try { symlinkSync(join(ROOT, 'node_modules'), join(codeRoot, 'node_modules'), 'dir'); } catch { /* already there */ }
+  // A junction on Windows: a 'dir' symlink needs Developer Mode there, fails
+  // with EPERM, and the swallowed error surfaced only as ERR_MODULE_NOT_FOUND.
+  try {
+    symlinkSync(join(ROOT, 'node_modules'), join(codeRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+  } catch { /* already there */ }
 
   // The marker: rule 3. No CAREER_OPS_* variable is set when this is used.
   writeFileSync(join(codeRoot, '.career-ops-data'), `${dataRoot}\n`);
