@@ -33,7 +33,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { flagValue, hasFlag } from './lib/cli-flags.mjs';
+import { flagValue, hasFlag, validateFlags } from './lib/cli-flags.mjs';
 import { sanitizeMarkdownField } from './scan.mjs';
 import { withPipelineLock } from './pipeline-lock.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
@@ -77,7 +77,16 @@ const USAGE = `
     --dry-run     print the annotations, write nothing
     --self-test   run the in-memory suite (no subprocess, no network)
 `;
-
+const KNOWN_FLAGS = [
+  '--limit',
+  '--cli',
+  '--model',
+  '--dry-run',
+  '--self-test',
+  '--help',
+  '-h',
+];
+const VALUE_FLAGS = ['--limit', '--cli', '--model'];
 /**
  * Clamp to [0,5] at one decimal, and sanitize the reason so a model-generated
  * string can never break the row's pipe-delimited grammar or forge a new row.
@@ -475,6 +484,10 @@ function selfTest() {
 
 if (isMainModule(import.meta.url)) {
   const args = process.argv.slice(2);
+  validateFlags(args, KNOWN_FLAGS, USAGE, {
+    valueFlags: VALUE_FLAGS,
+    requireOperand: true,
+  });
   if (args.includes('--self-test')) {
     process.exit(selfTest());
   } else {

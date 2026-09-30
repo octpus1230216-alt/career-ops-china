@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -398,6 +398,54 @@ test('linkedin-join.mjs --help --bogus still errors', () => {
   const r = runScript('linkedin-join.mjs', '--help', '--bogus');
   assert.equal(r.status, 1, `--help --bogus exited ${r.status}, want 1`);
   assert.match(r.all, /unrecognized flag/i);
+});
+
+// rank-pipeline.mjs read its flags with hasFlag/flagValue and never looked for
+// one it did not know, so `--dryrun` did a live run and wrote annotations into
+// data/pipeline.md, the one outcome --dry-run exists to prevent (#4600). These
+// cases are not SCRIPTS rows: runScript inherits the real environment and
+// checkout, and a regression here would re-rank the real pipeline through
+// whatever agent CLI is installed. Each case gets a throwaway CAREER_OPS_ROOT,
+// and CAREER_OPS_RANK_CLI names a binary that does not exist, so even a
+// regressed run reaches no user data, no model and no network.
+function runRankPipeline(root, ...args) {
+  const r = spawnSync(process.execPath, [join(ROOT, 'rank-pipeline.mjs'), ...args], {
+    cwd: root,
+    encoding: 'utf-8',
+    timeout: 30_000,
+    env: { ...process.env, CAREER_OPS_ROOT: root, CAREER_OPS_RANK_CLI: 'career-ops-no-such-cli' },
+  });
+  assert.equal(r.error, undefined, `rank-pipeline.mjs failed to spawn: ${r.error?.message}`);
+  assert.equal(r.signal, null, `rank-pipeline.mjs was killed by ${r.signal} (timeout?)`);
+  return { ...r, all: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+}
+
+test('rank-pipeline.mjs rejects --dryrun instead of writing data/pipeline.md', () => {
+  const root = mkdtempSync(join(tmpdir(), 'career-ops-rank-pipeline-'));
+  try {
+    mkdirSync(join(root, 'data'));
+    const pipeline = join(root, 'data', 'pipeline.md');
+    const before = '## Pending\n- [ ] https://x.test/1 | Acme | Backend Engineer\n';
+    writeFileSync(pipeline, before);
+    const r = runRankPipeline(root, '--dryrun');
+    assert.equal(r.status, 1, `rank-pipeline.mjs --dryrun exited ${r.status}, want 1`);
+    assert.match(r.all, /unrecognized flag\(s\): --dryrun/, 'rank-pipeline.mjs did not name --dryrun');
+    assert.equal(readFileSync(pipeline, 'utf-8'), before, '--dryrun changed data/pipeline.md');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Its usage block has no `Usage:` header, so the synopsis line identifies it.
+test('rank-pipeline.mjs --help exits 0 and prints usage', () => {
+  const root = mkdtempSync(join(tmpdir(), 'career-ops-rank-pipeline-'));
+  try {
+    const r = runRankPipeline(root, '--help');
+    assert.equal(r.status, 0, `rank-pipeline.mjs --help exited ${r.status}, want 0`);
+    assert.match(r.all, /node rank-pipeline\.mjs \[--limit N\]/, 'rank-pipeline.mjs --help printed no usage block');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 // cv-sync-check.mjs parsed no arguments before #3565, so a mistyped flag ran
