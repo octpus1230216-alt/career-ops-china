@@ -186,7 +186,34 @@ try {
     fail(`alias fallback = ${JSON.stringify(byTitle['Bad alias falls back to good one'])}`);
   }
 
-  // 8. Fetch - Invalid JSON
+  // 8. Fetch - Description passthrough
+  // scan.mjs reads job.description for content_filter (:3640),
+  // country_eligibility_filter (:3644) and visa_filter (:3648), and short-circuits
+  // to "pass" on empty text (:769) — so the key must survive when present and stay
+  // absent when there is no body, never arrive as an empty string.
+  const descRows = await localParser.fetch({
+    parser: {
+      command: 'node',
+      script: 'tests/providers/_fixture-local-parser.mjs',
+      args: ['description']
+    }
+  });
+  const byDescTitle = Object.fromEntries(descRows.map(r => [r.title, r]));
+
+  if (byDescTitle['Has JD']?.description === 'Own To B AI solutions.\n负责大模型交付。') {
+    pass('localParser.fetch() passes a non-empty description through verbatim');
+  } else {
+    fail(`description passthrough = ${JSON.stringify(byDescTitle['Has JD'])}`);
+  }
+
+  const dropped = ['Empty JD', 'Blank JD', 'No JD'].filter(t => byDescTitle[t] && 'description' in byDescTitle[t]);
+  if (dropped.length === 0 && descRows.length === 4) {
+    pass('localParser.fetch() omits the description key for empty, blank, or absent input');
+  } else {
+    fail(`description key should be absent, present on: ${JSON.stringify(dropped)} (rows=${descRows.length})`);
+  }
+
+  // 9. Fetch - Invalid JSON
   try {
     await localParser.fetch({
       parser: {

@@ -43,6 +43,21 @@ if (inputArgs[0] === 'posted-at') {
   process.exit(0);
 }
 
+// If the first argument is "description", exercise the description passthrough:
+// a non-empty body is copied verbatim (scan's content_filter,
+// country_eligibility_filter
+// and visa_filter all read it), while empty/blank/absent text must leave the key
+// out so those filters keep their "don't penalize missing data" early-return.
+if (inputArgs[0] === 'description') {
+  console.log(JSON.stringify([
+    { title: 'Has JD', url: 'https://example.com/d1', description: 'Own To B AI solutions.\n负责大模型交付。' },
+    { title: 'Empty JD', url: 'https://example.com/d2', description: '' },
+    { title: 'Blank JD', url: 'https://example.com/d3', description: '   ' },
+    { title: 'No JD', url: 'https://example.com/d4' },
+  ]));
+  process.exit(0);
+}
+
 // Default payload
 console.log(JSON.stringify([
   { title: 'Standard Job', url: 'https://example.com/job1', location: ['Remote', 'NY'] },

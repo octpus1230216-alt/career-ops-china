@@ -199,6 +199,12 @@ function normalizeParserJob(job, entry) {
     location: normalizeLocation(job.location || job.locations),
   };
 
+  // Pass through description so scan.mjs's content_filter and
+  // country_eligibility_filter can evaluate JD text, not just titles.
+  if (typeof job.description === 'string' && job.description.trim()) {
+    out.description = job.description;
+  }
+
   const postedAt = firstPostedAt(
     job.postedAt, job.posted_at, job.publishedAt, job.published_at,
     job.published_date, job.datePosted, job.date_posted,
