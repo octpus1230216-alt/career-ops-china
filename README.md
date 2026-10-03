@@ -29,11 +29,16 @@
 
 ### 关于"中国 CLI 聚合桥接"
 
-我的日常扫描流程用到了多源聚合（Hiring-Radar + job-pro 两个招聘 CLI → 去重缓存 → 只读 `local_parser` 喂给 `scan`），这套设计在 `portals.china.example.yml` 的 `cn_sources` / `job_boards` 块里以配置形式给了示例。
+我的日常扫描流程用到了多源聚合（**Hiring-Radar** + **job-pro** 两个招聘 CLI → 去重缓存 → 只读 `local_parser` 喂给 `scan`），这套设计在 `portals.china.example.yml` 的 `cn_sources` / `job_boards` 块里以配置形式给了示例。
 
-**但驱动它的脚本是我本地的私有资产**（`local/scripts/*.mjs`、`local/scripts/jobhunt_bridge.py`、`local/Hiring-Radar/` 等），按 career-ops 的 `local/` 隔离约定被 gitignore，**不随本仓库分发**。因此：
+这里要分清楚**两类东西都不在本仓库里**：
 
-> 克隆本仓库**不能开箱跑通**中国 CLI 聚合扫描——原生 provider 的公司（飞书/MokaHR/腾讯…）可以直接扫；要走 Hiring-Radar/job-pro 聚合需要你自备这些桥接脚本。
+- **被桥接的爬取 CLI 本体**（Hiring-Radar、job-pro、JobHunt-CLI）——**都是他人的开源项目**，我只是把它们聚合起来（署名见下方"第三方工具致谢"）。它们被我 clone/安装到 `local/` 下，按 career-ops 的 `local/` 隔离约定被 gitignore。
+- **我写的胶水/桥接脚本**（`local/scripts/cn_bridge.mjs`、`enrich-details.mjs`、`cn_cache_reader.mjs`、`jobhunt_bridge.py`）——把上述 CLI 的输出去重、归一、落成缓存喂给 `scan`。这些同样在 `local/` 里，**不随本仓库分发**。
+
+因此：
+
+> 克隆本仓库**不能开箱跑通**中国 CLI 聚合扫描——原生 provider 的公司（飞书 / MokaHR / 腾讯 / 美团 / 阿里 / 字节…）可以直接扫；要走 Hiring-Radar / job-pro 聚合，需要你**自行安装那些第三方 CLI** 并自备上面的桥接脚本，再把 `cn_sources` 接上。
 
 ---
 
@@ -81,6 +86,21 @@ node scan.mjs
 ## 数据与隐私约定
 
 沿用 career-ops 的 [Data Contract](DATA_CONTRACT.md)：**User Layer 永不自动更新、且默认被 gitignore**（`cv.md`、`config/profile.yml`、`modes/_profile.md`、`portals.yml`、`data/`、`reports/`、`interview-prep/`、`documents/`、`local/`、`snapshots/`）。本仓库里能看到的只有可复用的**代码与示例模板**，不含任何真实个人资料。
+
+---
+
+## 第三方工具致谢
+
+本 fork 的中国聚合扫描会**桥接调用**以下他人开发的开源工具（均**不含在本仓库**，需自行安装；版权归各自作者）：
+
+| 工具 | 出处 | 用途 |
+|------|------|------|
+| **career-ops**（上游本体） | <https://github.com/career-ops-hq/career-ops> · MIT | 整个求职引擎 / provider / 评分 / CV 生成 |
+| **Hiring-Radar** | <https://github.com/simonlin1212/Hiring-Radar> · MIT | 全量枚举中国 ATS 招聘（`hiring_radar.py`） |
+| **job-pro** | npm [`@ha7ch/job-pro`](https://www.npmjs.com/package/@ha7ch/job-pro) · <https://job.ha7ch.com> | 中国大厂校招/社招查询 + JD 正文富化（差集补量） |
+| **JobHunt-CLI** | <https://github.com/git-ellea/jobhunt-cli> | 终端招聘追踪 CLI，经 `local_parser` 桥接（以你实际安装的来源为准） |
+
+> 上述工具由各自作者维护；本仓库只做聚合与去重的胶水层，不对其数据准确性或可用性负责。
 
 ---
 
