@@ -18,10 +18,12 @@
 # │   portals.example.yml（2975 行，本文件未并入）。需要时把对应条目复制进下面
 # │   各块的 /* 占位 */ 处即可 —— 见文件末尾 § 可选并入区（勿删，留编辑空间）。
 # │
-# ├─ 本地资产说明 ──────────────────────────────────────────────────
-# │   本示例引用 local/scripts/*.mjs（cn_bridge / cache reader / enrich）与
-# │   local/Hiring-Radar、data/cn-jobs.json —— 这些属用户本地资产，默认 gitignore，
-# │   仓库里不含；要跑通中国 CLI 聚合需自备/放置这些脚本。仅用原生 provider 的公司不受影响。
+# ├─ 桥接脚本 & 第三方 CLI 位置 ────────────────────────────────────
+# │   本示例引用的胶水脚本（cn_bridge / cache reader / enrich / jobhunt_bridge）与
+# │   第三方 CLI 钉版副本（Hiring-Radar、job-pro）**已随仓库提供**，都在
+# │   integrations/cn/ 下（安装/运行见 integrations/cn/README.md，第三方署名见 NOTICE.md）。
+# │   运行时产物 data/cn-jobs.json、data/cn-cache 仍属用户层、被 gitignore。
+# │   仅用原生 provider 的公司（飞书 / MokaHR / 腾讯…）不依赖这些脚本，开箱即可扫。
 # └────────────────────────────────────────────────────────────────
 #
 # 目标（用户定义）：
@@ -682,7 +684,7 @@ tracked_companies:
 
   # ══ 中国大厂（JobHunt-CLI local_parser）══════════════════════════
   # 说明：走本地解析器桥接 JobHunt-CLI（scan_method: local_parser）。
-  # 脚本 local/scripts/jobhunt_bridge.py（gitignored）用 subprocess 调 CLI，
+  # 脚本 integrations/cn/scripts/jobhunt_bridge.py（随仓库提供）用 subprocess 调 CLI，
   # 输出 jobs-json-v1 到 stdout。timeout_ms 放宽是因为 npx 冷启动 + 官网抓取
   # 可能超过默认 20s。
 
@@ -691,7 +693,7 @@ tracked_companies:
     scan_method: local_parser
     parser:
       command: python3
-      script: local/scripts/jobhunt_bridge.py
+      script: integrations/cn/scripts/jobhunt_bridge.py
       format: jobs-json-v1
       timeout_ms: 150000
     enabled: true
@@ -924,15 +926,15 @@ company_aliases:
   "Li Auto": ["理想汽车", "理想", "lixiang", "liauto"]
 
 # ── 中国岗位外部 CLI 源（Hiring-Radar + job-pro）───────────────────
-# 这两个源都不直接进 job_boards 跑：由 local/scripts/cn_bridge.mjs 采集、
+# 这两个源都不直接进 job_boards 跑：由 integrations/cn/scripts/cn_bridge.mjs 采集、
 # 差集调度、按唯一键去重后落到 data/cn-jobs.json 缓存；scan.mjs 只通过下面
 # job_boards 里的只读 local-parser 读缓存（见文件末尾 cn-jobs 条目）。
 # scan.mjs 本身不读这个顶层块——它是 cn_bridge.mjs 的唯一配置来源。
 # 采集命令（带外刷新缓存，scan 绝不跑这些重 CLI）：
-#   node local/scripts/cn_bridge.mjs            采集→去重→写 data/cn-jobs.json
-#   node local/scripts/cn_bridge.mjs --dry-run  只报告，不写文件
-#   node local/scripts/cn_bridge.mjs --json     机器可读摘要
-#   node local/scripts/cn_bridge.mjs --check    就绪体检（不写文件）：逐项探测
+#   node integrations/cn/scripts/cn_bridge.mjs            采集→去重→写 data/cn-jobs.json
+#   node integrations/cn/scripts/cn_bridge.mjs --dry-run  只报告，不写文件
+#   node integrations/cn/scripts/cn_bridge.mjs --json     机器可读摘要
+#   node integrations/cn/scripts/cn_bridge.mjs --check    就绪体检（不写文件）：逐项探测
 #       python/npx、hiring_radar.py 是否存在、pycryptodome、Chrome、缓存、
 #       以及 job_boards 只读条目接线；有 FAIL 才非零退出，WARN/INFO 可忽略。
 # 两个源都支持的可选键（写在各自块里即可）：
@@ -983,7 +985,7 @@ cn_sources:
     # 数组、映 15 字段）；单 key 失败（如 Moka 未装 pycryptodome、站点超时）不阻断整轮。
     command: "python3 hiring_radar.py"   # 基础命令；--local/--json 由桥接逐 key 拼接
     companies: all                        # all → 枚举到的全部 key；也可写 [key1, key2]
-    dir: local/Hiring-Radar               # 已 clone 到此（gitignored）；或设 HIRING_RADAR_DIR
+    dir: integrations/cn/vendor/Hiring-Radar   # 仓库自带钉版副本；或设 HIRING_RADAR_DIR
     # keywords: ["AI", "大模型", "Agent"]  # 可选：拼成 --keyword 跨 170 个解析器预筛（大幅降量）
     # limit: 20                           # 可选：只查前 N 个 key（冒烟测试用；CLI --limit 同效）
     # timeout_ms: 180000                  # 可选：--list 超时
@@ -995,14 +997,14 @@ cn_sources:
     companies: auto-diff
     keywords: ["AI", "大模型", "Agent"]
     scope: all               # job-pro 仅支持 campus / intern / all（“social” 无效，实测报错）
-    # ── JD 正文富化（进程内直调，走 local/scripts/enrich-details.mjs）─────
+    # ── JD 正文富化（进程内直调，走 integrations/cn/scripts/enrich-details.mjs）─────
     # 旧路径逐条 spawn `npx @ha7ch/job-pro detail <id>`，实测 ~2.8s/条，且那是
     # 进程启动开销不是网络；差集按千计条 → 小时级。现改为每家一个子进程，
     # 在进程内 import dist/<slug>.js 直调 fetchPositionDetail，实测 89–111ms/条。
     fetch_details: true                              # false 则只保留元数据行
-    enrich_script: local/scripts/enrich-details.mjs
-    package_root: local/node_modules/@ha7ch/job-pro   # 钉版本副本：npm install --prefix local @ha7ch/job-pro@1.2.1
-    enrich_store_dir: local/cache                     # 每家一个续跑 store：jobpro-enriched-<slug>.json
+    enrich_script: integrations/cn/scripts/enrich-details.mjs
+    package_root: integrations/cn/vendor/job-pro   # 仓库自带钉版副本；运行依赖需 npm install（见 integrations/cn/README.md）
+    enrich_store_dir: data/cn-cache                 # 每家一个续跑 store：jobpro-enriched-<slug>.json
     detail_limit: 0                                   # 每家富化上限（0 = 不限；冒烟可临时设 20）
     detail_concurrency: 3                             # 一般家族并发（硬上限 8）
     moka_concurrency: 2                               # 命中 slow_families 的家族降到此并发
@@ -1021,14 +1023,14 @@ cn_sources:
 job_boards:
 
   # ── 中国岗位缓存（只读 local-parser，喂 scan.mjs）─────────────────
-  # 由 local/scripts/cn_bridge.mjs 采集/去重后写入 data/cn-jobs.json；本条目
+  # 由 integrations/cn/scripts/cn_bridge.mjs 采集/去重后写入 data/cn-jobs.json；本条目
   # 仅用只读 local-parser 把缓存原样吐给 scan，绝不重跑任何外部 CLI。
   # 岗位级过滤（title/location/content）与去重仍由 scan.mjs 统一执行。
   - name: 中国岗位缓存 (cn-jobs)
     scan_method: local_parser
     parser:
       command: node
-      script: local/scripts/cn_cache_reader.mjs
+      script: integrations/cn/scripts/cn_cache_reader.mjs
       format: jobs-json-v1
       timeout_ms: 60000
       # 全量缓存可达 ~2 万行、reader 一次吐 ~30MB；local-parser 默认
@@ -1037,7 +1039,7 @@ job_boards:
       # 把上限抬到 128MB，无需改系统层 provider。
       max_buffer_bytes: 134217728
     enabled: true
-    notes: "只读缓存桥接：读 data/cn-jobs.json（Hiring-Radar 全量 + job-pro 差集，已按公司别名与职位唯一键去重、排除原生 provider 中国公司）。采集请用 node local/scripts/cn_bridge.mjs 刷新缓存；缓存为空时本条目输出 0 条、不影响其它源。"
+    notes: "只读缓存桥接：读 data/cn-jobs.json（Hiring-Radar 全量 + job-pro 差集，已按公司别名与职位唯一键去重、排除原生 provider 中国公司）。采集请用 node integrations/cn/scripts/cn_bridge.mjs 刷新缓存；缓存为空时本条目输出 0 条、不影响其它源。"
 
   # -- 波兰市场（模板自带，对你的准入无价值，保留禁用）--
   - name: SolidJobs IT

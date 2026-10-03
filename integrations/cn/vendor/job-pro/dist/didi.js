@@ -1,0 +1,450 @@
+// Thin client for Didi's public job portal API at talent.didiglobal.com.
+//
+// ============================================================
+// API DISCOVERY NOTES (probed 2026-05):
+//
+//   campus.didiglobal.com  — Moka white-label campus site (redirects to /campus_apply/didiglobal/96064).
+//                            All data endpoints return AES-encrypted blobs {"data":"...","necromancer":"..."}.
+//                            Cannot be decoded without the JS runtime cipher. BLOCKED.
+//
+//   talent.didiglobal.com  — Didi's self-hosted recruiting portal. Serves all open positions
+//                            (campus + social hire combined, 1200+ active listings).
+//                            Public, unauthenticated, no CORS restrictions.
+//
+//   talent.didiglobal.com/recruit-portal-service/api/job/front/list — live ✓
+//   talent.didiglobal.com/recruit-portal-service/api/job/front/view/{jdId} — live ✓
+//   talent.didiglobal.com/recruit-portal-service/api/job/job_locations — live ✓
+//   talent.didiglobal.com/recruit-portal-service/api/job/jdpublish/confirm/listJdTypes — live ✓
+//
+// ============================================================
+// Endpoint: GET /recruit-portal-service/api/job/front/list
+//   Query params:
+//     jobName    — keyword filter (URL-encoded, e.g. "算法")
+//     workArea   — city name filter, e.g. "北京市" (from /api/job/job_locations list)
+//     jobType    — job category code (integer, see taxonomy below)
+//     recruitType — declared but NOT enforced server-side; returns same 1213 regardless of value
+//     page       — 1-indexed page number
+//     size       — page size; server ignores values != 16 and always returns 16 items/page
+//   Response: { meta:{api,method,code:0,message}, data:{total,items:[...],page,size} }
+//
+// ============================================================
+// Filter taxonomy (verified 2026-05):
+//
+// jobType codes (from GET /api/job/jdpublish/confirm/listJdTypes):
+//   1=技术 (~416)   2=设计 (~20)    3=产品 (~101)   4=数据 (~68)
+//   5=运营 (~382)   6=销售 (~54)    7=客服          9=市场 (~18)
+//   10=人力 (~18)   11=行政         12=财务          13=法务
+//   14=公关         15=战略         16=风控          18=安全 (~47)
+//   19=供应链        20=采购
+//
+// workArea city values (from GET /api/job/job_locations, 52 total):
+//   Top cities (2026-05): 北京市 (~838) 深圳市 上海市 杭州市 成都市 广州市
+//   Also: 武汉市 天津市 南京市 西安市 重庆市 厦门市 香港岛 九龙
+//   International: Mexico City  Sao Paulo
+//
+// ============================================================
+// Site URL pattern for campus-tab positions (talent.didiglobal.com):
+//   The portal has four tabs: 社会招聘 (social) / 校园招聘 (campus) / 实习生招聘 (intern) / 内推
+//   The API returns all listings without tab-level filtering — both campus (JR-prefix jdNo) and
+//   social (J-prefix jdNo) positions are included in every response.
+//   There is no public API filter to isolate campus-only listings.
+//   The campus.didiglobal.com (Moka) site would expose campus-only data but uses client-side AES
+//   encryption that cannot be bypassed without executing Moka's JavaScript.
+//
+// ============================================================
+// Page size is always 16 (server-enforced). To fetch more positions use fetchAllPositions()
+// which paginates up to maxPages.
+//
+// ============================================================
+// ---- PositionSummary field mapping (Didi → canonical) ----
+//   post_id       ← jdId  (stringified) or jdNo as fallback
+//   title         ← jobName (stripped of trailing "(jdNo)" suffix that Didi appends)
+//   project       ← deptName  (closest to Tencent's projectName / BG)
+//   recruit_label ← "" (recruitType field exists in /view but not in list response; campus vs social
+//                       cannot be distinguished from the list API)
+//   bgs           ← "" (Didi does not expose BG / 事业群 in public search)
+//   work_cities   ← workArea
+//   apply_url     ← https://talent.didiglobal.com/campus#/position/{jdId}/detail
+import { extractResumeSignals, scoreOverlap, checkResume, pickDistinctiveTerms } from "./tencent.js";
+export { checkResume };
+/**
+ * Didi supports social + campus + intern + all (1.1.0+). The upstream
+ * /job/front/list endpoint returns a mixed feed with no server-side recruit
+ * filter — campus posts carry a "JR-" prefix on `jdNo`, social posts carry
+ * "J-". Scope filtering is applied client-side after the fetch.
+ *
+ * Scope translation (client-side filter on `jdNo` prefix):
+ *   social  → keep rows where jdNo starts with "J-" (and NOT "JR-")
+ *   campus  → keep rows where jdNo starts with "JR-"
+ *   intern  → keep rows where jdNo starts with "JR-" (no separate intern signal in jdNo)
+ *   all     → no filter
+ *   undefined → no filter (historical behaviour — mixed feed)
+ */
+export const supportedScopes = ["social", "campus", "intern", "all"];
+function jdNoMatchesScope(jdNo, s) {
+    if (!s || s === "all")
+        return true;
+    const n = jdNo ?? "";
+    // jdNo values have no hyphen: campus → "JR2026051100V", social → "J251211006".
+    if (s === "campus" || s === "intern")
+        return n.startsWith("JR");
+    if (s === "social")
+        return n.startsWith("J") && !n.startsWith("JR");
+    return true;
+}
+const API_ROOT = "https://talent.didiglobal.com/recruit-portal-service/api";
+const PORTAL_PAGE = "https://talent.didiglobal.com/";
+const DETAIL_PAGE = (jdId) => `https://talent.didiglobal.com/campus#/position/${encodeURIComponent(jdId)}/detail`;
+const DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    Accept: "application/json, text/plain, */*",
+    Referer: PORTAL_PAGE,
+};
+async function call(path, params = {}) {
+    // Build query string — omit undefined values
+    const qs = Object.entries(params)
+        .filter(([, v]) => v !== undefined && v !== "")
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+        .join("&");
+    const url = `${API_ROOT}${path}${qs ? "?" + qs : ""}`;
+    let response;
+    try {
+        response = await fetch(url, { headers: DEFAULT_HEADERS });
+    }
+    catch (err) {
+        return {
+            ok: false,
+            message: `network error: ${err instanceof Error ? err.message : String(err)}`,
+        };
+    }
+    if (!response.ok) {
+        return { ok: false, message: `HTTP ${response.status}: ${response.statusText}` };
+    }
+    let payload;
+    try {
+        payload = (await response.json());
+    }
+    catch (err) {
+        return { ok: false, message: `bad JSON: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    const code = payload.meta?.code ?? 0;
+    return {
+        ok: code === 0,
+        data: payload.data,
+        message: payload.meta?.message || (code === 0 ? "ok" : "upstream error"),
+    };
+}
+/** Strip the "(JR2026XXXXXXX)" suffix that Didi appends to jobName in the list endpoint. */
+function stripJdNoSuffix(jobName, jdNo) {
+    if (!jdNo)
+        return jobName;
+    const suffix = ` (${jdNo})`;
+    return jobName.endsWith(suffix) ? jobName.slice(0, -suffix.length) : jobName;
+}
+function summarizePosition(item) {
+    const jdId = String(item.jdId ?? "");
+    const rawName = item.jobName ?? "";
+    const title = stripJdNoSuffix(rawName, item.jdNo);
+    return {
+        post_id: jdId || (item.jdNo ?? ""),
+        title,
+        project: item.deptName ?? "",
+        recruit_label: "", // not available in list response
+        bgs: "",
+        work_cities: (item.workArea ?? "").trim(),
+        apply_url: jdId ? DETAIL_PAGE(jdId) : PORTAL_PAGE,
+    };
+}
+// ---------- searchPositions ----------
+export async function searchPositions(opts = {}) {
+    const page = Math.max(1, opts.page ?? 1);
+    const keyword = (opts.keyword ?? "").trim().slice(0, 60);
+    const params = {
+        page,
+        size: 16, // server enforces 16; pass it explicitly for clarity
+        ...(keyword ? { jobName: keyword } : {}),
+        ...(opts.workArea ? { workArea: opts.workArea } : {}),
+        ...(opts.jobType !== undefined ? { jobType: opts.jobType } : {}),
+    };
+    const response = await call("/job/front/list", params);
+    if (!response.ok || !response.data) {
+        return {
+            ok: false,
+            message: response.message,
+            source: "talent.didiglobal.com",
+            query: params,
+            total: 0,
+            positions: [],
+        };
+    }
+    const rawRows = response.data.items ?? [];
+    // 1.1.0+: --scope is a client-side filter on jdNo prefix (no server-side recruit filter).
+    const rows = rawRows.filter((r) => jdNoMatchesScope(r.jdNo, opts.scope));
+    const notes = [];
+    if (opts.pageSize !== undefined && opts.pageSize !== 16) {
+        // Verified live: the server returns exactly 16 rows regardless of `size`.
+        notes.push("Didi's API enforces a fixed page size of 16 — --page-size has no effect.");
+    }
+    if (opts.scope && opts.scope !== "all") {
+        notes.push("total is the upstream unfiltered feed count; --scope is filtered client-side per page (jdNo prefix), so positions may hold fewer rows.");
+    }
+    return {
+        ok: true,
+        source: "talent.didiglobal.com",
+        query: params,
+        page,
+        page_size: rows.length, // actual count after scope filter (always ≤ 16)
+        total: response.data.total ?? rawRows.length,
+        ...(notes.length ? { note: notes.join(" ") } : {}),
+        positions: rows.map(summarizePosition),
+    };
+}
+// ---------- fetchAllPositions ----------
+export async function fetchAllPositions(opts = {}) {
+    // 1.2.x: default raised 10 → 80 pages. The server hard-codes 16 rows/page,
+    // so the full feed (~1110 posts, probed 2026-07-11) needs ~70 pages; the
+    // old 10-page default silently stopped at 160/1110. If `total` needs more
+    // pages than maxPages allows we stop and report truncated:true.
+    const maxPages = Math.max(1, opts.maxPages ?? 80);
+    const SERVER_PAGE_SIZE = 16; // fixed server-side; `size` param is ignored
+    const seen = new Set();
+    const bucket = [];
+    let total;
+    let pagesNeeded;
+    let duplicatesRemoved = 0;
+    for (let page = 1; page <= maxPages; page++) {
+        const result = await searchPositions({ ...opts, page });
+        if (!result.ok) {
+            return {
+                ok: false,
+                message: result.message,
+                source: "talent.didiglobal.com",
+                fetched: bucket.length,
+                positions: bucket,
+            };
+        }
+        if (total === undefined) {
+            total = result.total;
+            // `total` is the upstream unfiltered feed size and the server always
+            // pages by 16, so this bounds the crawl correctly even when a --scope
+            // filter shrinks the per-page row count below 16.
+            pagesNeeded = Math.max(1, Math.ceil((total ?? 0) / SERVER_PAGE_SIZE));
+        }
+        // Dedupe by post_id: Didi's own API can repeat a jdId across pages
+        // (verified live 2026-06: jdId 61688 appeared on two of the first 10
+        // pages). Count only unique positions.
+        for (const p of result.positions) {
+            if (p.post_id) {
+                if (seen.has(p.post_id)) {
+                    duplicatesRemoved++;
+                    continue;
+                }
+                seen.add(p.post_id);
+            }
+            bucket.push(p);
+        }
+        // Without a scope filter an empty page means the feed ended early
+        // (total shrank mid-crawl). With a scope filter a page can legitimately
+        // filter down to 0 rows, so rely on the page-count bound instead.
+        if (!result.positions.length && (!opts.scope || opts.scope === "all"))
+            break;
+        if (pagesNeeded !== undefined && page >= pagesNeeded)
+            break; // upstream exhausted
+    }
+    const truncated = pagesNeeded !== undefined && pagesNeeded > maxPages;
+    const notes = [];
+    if (duplicatesRemoved > 0) {
+        notes.push(`${duplicatesRemoved} duplicate post_id(s) from the upstream feed were removed.`);
+    }
+    if (truncated) {
+        notes.push(`upstream has ${pagesNeeded} pages of ${SERVER_PAGE_SIZE}; stopped at --max-pages ${maxPages} — pass a larger --max-pages to fetch the rest.`);
+    }
+    if (opts.scope && opts.scope !== "all") {
+        notes.push("total is the upstream unfiltered feed count; fetched counts only rows matching --scope (client-side jdNo-prefix filter).");
+    }
+    return {
+        ok: true,
+        source: "talent.didiglobal.com",
+        total: total ?? bucket.length,
+        fetched: bucket.length,
+        truncated,
+        ...(duplicatesRemoved > 0 ? { duplicates_removed: duplicatesRemoved } : {}),
+        ...(notes.length ? { note: notes.join(" ") } : {}),
+        positions: bucket,
+    };
+}
+// ---------- fetchPositionDetail ----------
+export async function fetchPositionDetail(postId) {
+    const id = (postId ?? "").trim();
+    if (!id)
+        return { ok: false, source: "talent.didiglobal.com", message: "post_id is required" };
+    const response = await call(`/job/front/view/${encodeURIComponent(id)}`);
+    if (!response.ok || !response.data) {
+        return {
+            ok: false,
+            source: "talent.didiglobal.com",
+            post_id: id,
+            message: response.message || "no detail returned",
+        };
+    }
+    const raw = response.data;
+    const jdId = String(raw.jdId ?? id);
+    const rawName = raw.jobName ?? "";
+    const title = stripJdNoSuffix(rawName, raw.jdNo);
+    return {
+        ok: true,
+        source: "talent.didiglobal.com",
+        post_id: jdId,
+        jd_no: raw.jdNo ?? "",
+        title,
+        project: raw.deptName ?? "",
+        recruit_label: raw.recruitType ?? "",
+        description: raw.jobDesc ?? "",
+        requirements: raw.qualification ?? "",
+        work_cities: (raw.workArea ?? "").trim(),
+        job_type: raw.jobType ?? "",
+        recruit_num: raw.recruitNum ?? null,
+        publish_time: raw.publishTime ?? "",
+        apply_url: DETAIL_PAGE(jdId),
+    };
+}
+// ---------- fetchDictionaries ----------
+export async function fetchDictionaries() {
+    const [locations, jobTypes] = await Promise.all([
+        call("/job/job_locations"),
+        call("/job/jdpublish/confirm/listJdTypes"),
+    ]);
+    return {
+        ok: locations.ok && jobTypes.ok,
+        source: "talent.didiglobal.com",
+        cities: locations.data ?? [],
+        job_types: (jobTypes.data ?? []).map((jt) => ({ code: jt.code, name: jt.name })),
+        note: [
+            "cities: pass as workArea filter (exact string match, e.g. '北京市').",
+            "job_types: pass as jobType filter (integer code, e.g. 1 for 技术).",
+            "recruitType filter is declared but NOT enforced — all values return the full dataset.",
+            "Page size is server-fixed at 16 items/page regardless of size param.",
+        ].join(" "),
+    };
+}
+// ---------- stub notices ----------
+const STUB_NOTICES = {
+    ok: false,
+    source: "talent.didiglobal.com",
+    message: "Didi: no public notices/announcements endpoint on talent.didiglobal.com",
+};
+export async function listNotices() {
+    return STUB_NOTICES;
+}
+export async function getNotice(_id) {
+    return {
+        ok: false,
+        source: "talent.didiglobal.com",
+        message: "Didi: no public notices endpoint",
+    };
+}
+export async function findNoticesByQuestion(_question, _opts = {}) {
+    return {
+        ok: false,
+        source: "talent.didiglobal.com",
+        message: "Didi: no public notices endpoint",
+    };
+}
+// ---------- matchResume ----------
+export async function matchResume(text, opts = {}) {
+    const topN = Math.max(1, opts.topN ?? 5);
+    const candidates = Math.max(topN, opts.candidates ?? 20);
+    const { terms, cities } = extractResumeSignals(text ?? "");
+    if (!terms.length) {
+        return {
+            ok: false,
+            source: "talent.didiglobal.com",
+            message: "could not extract any technical signals from the text",
+            preview: (text ?? "").slice(0, 120),
+        };
+    }
+    const queries = pickDistinctiveTerms(terms, 3);
+    if (!queries.length)
+        queries.push(terms[0] ?? "");
+    const lists = await Promise.all(queries.map((q) => searchPositions({ keyword: q, page: 1 })));
+    const seen = new Set();
+    const pool = [];
+    let lastErr;
+    for (const l of lists) {
+        if (!l.ok) {
+            lastErr = l.message;
+            continue;
+        }
+        for (const p of l.positions) {
+            if (!seen.has(p.post_id)) {
+                seen.add(p.post_id);
+                pool.push(p);
+            }
+        }
+    }
+    if (!pool.length) {
+        const broad = await searchPositions({ page: 1 });
+        if (broad.ok)
+            pool.push(...broad.positions);
+    }
+    if (!pool.length) {
+        return { ok: false, source: "talent.didiglobal.com", message: lastErr ?? "no positions returned", positions: [] };
+    }
+    const scored = [];
+    for (const p of pool) {
+        const blob = [p.title, p.project, p.recruit_label, p.work_cities].join(" ");
+        const { score, reasons } = scoreOverlap(blob, terms, cities);
+        if (score > 0) {
+            scored.push({ score, position: p, reasons });
+        }
+    }
+    scored.sort((a, b) => b.score - a.score);
+    let shortlist = scored.slice(0, Math.max(topN, candidates));
+    if (!shortlist.length) {
+        shortlist = pool.slice(0, candidates).map((position) => ({
+            score: 0,
+            position,
+            reasons: [],
+        }));
+    }
+    const enriched = [];
+    for (const entry of shortlist.slice(0, candidates)) {
+        const detail = await fetchPositionDetail(entry.position.post_id);
+        if (detail.ok) {
+            const jdBlob = [detail.description, detail.requirements, detail.work_cities].join(" ");
+            const { score: extraScore, reasons: extraReasons } = scoreOverlap(jdBlob, terms, cities);
+            const combined = [...new Set([...entry.reasons, ...extraReasons])].slice(0, 5);
+            enriched.push({
+                ...entry,
+                score: entry.score + extraScore,
+                reasons: combined,
+                description: detail.description,
+                requirements: detail.requirements,
+            });
+        }
+        else {
+            enriched.push(entry);
+        }
+    }
+    enriched.sort((a, b) => b.score - a.score);
+    const matches = enriched.slice(0, topN).map((s) => {
+        const mr = s.reasons.length > 0
+            ? s.reasons.slice(0, 5)
+            : ["no specific keyword overlap — surfaced from initial keyword search"];
+        return {
+            ...s.position,
+            description: s.description,
+            requirements: s.requirements,
+            match_reasons: mr,
+        };
+    });
+    return {
+        ok: true,
+        source: "talent.didiglobal.com",
+        extracted_terms: terms,
+        city_preferences: cities,
+        matches,
+        note: "match_reasons surfaces overlapping keywords, not a probability of getting an interview. " +
+            "The only authority on selection is HR.",
+    };
+}

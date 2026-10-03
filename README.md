@@ -24,21 +24,20 @@
 |------|------|------|
 | 中国 ATS 定向配置**示例模板** | [`templates/portals.china.example.yml`](templates/portals.china.example.yml) | 展示如何把 MokaHR / 飞书招聘 / 腾讯 / 美团 / 阿里 / 字节 等中国 ATS、以及外部招聘 CLI 桥接进 `scan`；含北京 + 真全球远程的 `location_filter`、标题/内容过滤写法 |
 | local-parser 一处小修复 | `providers/local-parser.mjs` | 透传 `job.description`，让 `content_filter` / `country_eligibility_filter` / `visa` 相关过滤能拿到正文信号 |
+| 中国 CLI 聚合桥接脚本 | [`integrations/cn/scripts/`](integrations/cn/) | 自写的胶水层：`cn_bridge.mjs`（采集去重）/ `enrich-details.mjs` / `cn_cache_reader.mjs`（只读喂 scan）/ `jobhunt_bridge.py` |
+| 第三方 CLI 钉版副本 | [`integrations/cn/vendor/`](integrations/cn/vendor/) | **他人开源项目**的源码快照：Hiring-Radar、job-pro（MIT，署名见 [`integrations/cn/NOTICE.md`](integrations/cn/NOTICE.md)） |
 
 其余个性化部分（真实的 `portals.yml`、`cv.md`、`config/profile.yml`、`data/`、`reports/`、`interview-prep/`）属 career-ops 的 **User Layer**，默认 `.gitignore`，**不在本仓库**。
 
 ### 关于"中国 CLI 聚合桥接"
 
-我的日常扫描流程用到了多源聚合（**Hiring-Radar** + **job-pro** 两个招聘 CLI → 去重缓存 → 只读 `local_parser` 喂给 `scan`），这套设计在 `portals.china.example.yml` 的 `cn_sources` / `job_boards` 块里以配置形式给了示例。
+我的日常扫描流程用到了多源聚合（**Hiring-Radar** + **job-pro** 两个招聘 CLI → 去重缓存 → 只读 `local_parser` 喂给 `scan`）。这套东西**已随仓库放在 [`integrations/cn/`](integrations/cn/) 下**，clone 即自带：
 
-这里要分清楚**两类东西都不在本仓库里**：
+- `integrations/cn/scripts/` —— 我写的胶水脚本（采集去重的 `cn_bridge.mjs`、只读喂 scan 的 `cn_cache_reader.mjs`、JD 富化的 `enrich-details.mjs`、桥接 JobHunt-CLI 的 `jobhunt_bridge.py`）。
+- `integrations/cn/vendor/Hiring-Radar/`、`integrations/cn/vendor/job-pro/` —— 两个第三方 CLI 的**钉版源码快照**（MIT，作者不是我，署名见 [`integrations/cn/NOTICE.md`](integrations/cn/NOTICE.md)）。
+- `templates/portals.china.example.yml` 的 `cn_sources` / `job_boards` 已把路径指向 `integrations/cn/`，配置自洽。
 
-- **被桥接的爬取 CLI 本体**（Hiring-Radar、job-pro、JobHunt-CLI）——**都是他人的开源项目**，我只是把它们聚合起来（署名见下方"第三方工具致谢"）。它们被我 clone/安装到 `local/` 下，按 career-ops 的 `local/` 隔离约定被 gitignore。
-- **我写的胶水/桥接脚本**（`local/scripts/cn_bridge.mjs`、`enrich-details.mjs`、`cn_cache_reader.mjs`、`jobhunt_bridge.py`）——把上述 CLI 的输出去重、归一、落成缓存喂给 `scan`。这些同样在 `local/` 里，**不随本仓库分发**。
-
-因此：
-
-> 克隆本仓库**不能开箱跑通**中国 CLI 聚合扫描——原生 provider 的公司（飞书 / MokaHR / 腾讯 / 美团 / 阿里 / 字节…）可以直接扫；要走 Hiring-Radar / job-pro 聚合，需要你**自行安装那些第三方 CLI** 并自备上面的桥接脚本，再把 `cn_sources` 接上。
+> **能开箱到什么程度**：原生 provider 的公司（飞书 / MokaHR / 腾讯 / 美团 / 阿里 / 字节…）clone 后可直接 `node scan.mjs`。要走 Hiring-Radar / job-pro 聚合，源码已给你，但需**各自安装运行时依赖**（`pip install -r …/Hiring-Radar/requirements.txt`、在 `vendor/job-pro` 里 `npm install`），再 `node integrations/cn/scripts/cn_bridge.mjs` 刷缓存。JobHunt-CLI **未** vendored（体积/许可考量），`jobhunt_bridge.py` 需你自备该 CLI。完整步骤见 [`integrations/cn/README.md`](integrations/cn/README.md)。
 
 ---
 
@@ -91,16 +90,16 @@ node scan.mjs
 
 ## 第三方工具致谢
 
-本 fork 的中国聚合扫描会**桥接调用**以下他人开发的开源工具（均**不含在本仓库**，需自行安装；版权归各自作者）：
+本 fork 的中国聚合扫描会**桥接调用**以下他人开发的开源工具（版权归各自作者，本仓库非其作者）：
 
-| 工具 | 出处 | 用途 |
-|------|------|------|
-| **career-ops**（上游本体） | <https://github.com/career-ops-hq/career-ops> · MIT | 整个求职引擎 / provider / 评分 / CV 生成 |
-| **Hiring-Radar** | <https://github.com/simonlin1212/Hiring-Radar> · MIT | 全量枚举中国 ATS 招聘（`hiring_radar.py`） |
-| **job-pro** | npm [`@ha7ch/job-pro`](https://www.npmjs.com/package/@ha7ch/job-pro) · <https://job.ha7ch.com> | 中国大厂校招/社招查询 + JD 正文富化（差集补量） |
-| **JobHunt-CLI** | <https://github.com/git-ellea/jobhunt-cli> | 终端招聘追踪 CLI，经 `local_parser` 桥接（以你实际安装的来源为准） |
+| 工具 | 出处 | 是否随仓库 | 用途 |
+|------|------|-----------|------|
+| **career-ops**（上游本体） | <https://github.com/career-ops-hq/career-ops> · MIT | 是（整个仓库基于它） | 求职引擎 / provider / 评分 / CV 生成 |
+| **Hiring-Radar** | <https://github.com/simonlin1212/Hiring-Radar> · MIT | **是**，vendored 于 `integrations/cn/vendor/Hiring-Radar/` | 全量枚举中国 ATS 招聘（`hiring_radar.py`） |
+| **job-pro** | npm [`@ha7ch/job-pro`](https://www.npmjs.com/package/@ha7ch/job-pro) · <https://job.ha7ch.com> · MIT | **是**，vendored 于 `integrations/cn/vendor/job-pro/`（不含依赖，需 `npm install`） | 中国大厂校招/社招查询 + JD 正文富化 |
+| **JobHunt-CLI** | <https://github.com/git-ellea/jobhunt-cli> | **否**，需自备 | 终端招聘追踪 CLI，经 `jobhunt_bridge.py` 桥接（以你实际安装来源为准） |
 
-> 上述工具由各自作者维护；本仓库只做聚合与去重的胶水层，不对其数据准确性或可用性负责。
+> vendored 副本均为**钉版源码快照**，完整许可与署名见 [`integrations/cn/NOTICE.md`](integrations/cn/NOTICE.md)。上述工具由各自作者维护，本仓库只做聚合与去重的胶水层，不对其数据准确性或可用性负责。
 
 ---
 
