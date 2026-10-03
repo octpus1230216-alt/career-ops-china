@@ -1,0 +1,1168 @@
+# Portal Scanner Configuration — 中国市场搭桥示例（合并版）
+# Used by /career-ops scan to discover new offers automatically.
+#
+# ┌─ 这份文件是什么 ────────────────────────────────────────────────
+# │ 中国 ATS / 外部招聘 CLI 桥接进 career-ops 的**完整可复用示例**：
+# │ 以真实中国定向配置为主体（tracked_companies / cn_sources / location_filter
+# │ 等），保留各中国 ATS provider 的写法与踩坑注释。复制成仓库根 portals.yml 即可改。
+# │
+# ├─ 中国 ATS 写法速查（详见各块内联注释 + docs/local-parser-cookbook.md）──
+# │   • MokaHR 社招：app.mokahr.com/social-recruitment/<org-slug>/<orgId>
+# │   • 飞书招聘：    <公司短名>.jobs.feishu.cn（字节 jobs.bytedance.com 也走此 provider）
+# │   • 自建 ATS：   careers.tencent.com / zhaopin.meituan.com / talent.alibaba.com（有专用 provider）
+# │   • CLI 桥接：   scan_method: local_parser + parser.script，输出 jobs-json-v1
+# │   • 多源聚合：   cn_sources（采集脚本写缓存）+ job_boards 只读缓存（采集与扫描解耦）
+# │
+# ├─ 与上游通用模板的关系 ──────────────────────────────────────────
+# │   欧美通用公司 / search_queries 目录 / 全球招聘板目录见同目录
+# │   portals.example.yml（2975 行，本文件未并入）。需要时把对应条目复制进下面
+# │   各块的 /* 占位 */ 处即可 —— 见文件末尾 § 可选并入区（勿删，留编辑空间）。
+# │
+# ├─ 本地资产说明 ──────────────────────────────────────────────────
+# │   本示例引用 local/scripts/*.mjs（cn_bridge / cache reader / enrich）与
+# │   local/Hiring-Radar、data/cn-jobs.json —— 这些属用户本地资产，默认 gitignore，
+# │   仓库里不含；要跑通中国 CLI 聚合需自备/放置这些脚本。仅用原生 provider 的公司不受影响。
+# └────────────────────────────────────────────────────────────────
+#
+# 目标（用户定义）：
+#   1. 北京岗位 —— 主战场
+#   2. 全球可远程岗位 —— 点缀（真·不限地域，不含 "Remote - US/EMEA" 这类区域锁定）
+#
+# 本文件的分层原则（改之前请先读）：
+#   - 值可以随便改：关键词表、公司条目、enabled、max_pages、notes
+#   - 键名不能改：顶层块名（title_filter / tracked_companies ...）写死在代码里
+#   - provider 的值只能取 providers/*.mjs 里已有的 id（见 docs/SUPPORTED_JOB_BOARDS.md）
+#   - 不写 provider 更好：代码会从 careers_url 自动识别（greenhouse/ashby/lever/...）
+#   - 改完必须跑：node validate-portals.mjs         （结构校验，0 errors 才算过）
+#                 node verify-portals.mjs            （爬取体检，看能不能真爬到）
+#
+# 实测基线演进（每次改动后都跑 verify-portals.mjs）：
+#   原始配置          11 live / 0 unresolved
+#   2026-10-01 v1     17 live / 0 unresolved
+#   2026-10-01 v2     25 live / 0 unresolved   ← 当前
+#
+# 本版相对上一版的改动（详见文件末尾 § 变更记录）：
+#   1. 新增 8 家公司（7 家国内 AI 独角兽 + 理想汽车），全部实测可爬
+#   2. 标题过滤器放宽一档（加 Engineer/Manager/Lead 等通用职能词）+ 技术岗噪声对冲
+#   3. 修复严重漏洞：区域锁定远程的「逗号形态」("Remote, EMEA") 此前漏网
+#   4. 补 90+ 美国城市/州名 + 非洲/中东地名（Ashby 会把地址折进 location）
+#   5. 澄清 Cursor/Harvey/Snowflake 当前 0 条可投的原因（锁区域或已过期）
+
+
+# ── 扫描历史去重策略（可选）────────────────────────────────────────
+# 默认：scan-history.tsv 里记录过的 URL 永久去重。
+# 有些岗位会重新发布，30 天后允许再次进入管道。
+scan_history:
+  recheck_after_days: 30
+  # 地点纳入去重比较：同一公司在不同城市开的同名岗位算两个岗位。
+  # 你的准入是「北京 or 远程」，城市是硬边界，所以开启。
+  dedup_include_location: true
+
+# ── 地点过滤（核心）────────────────────────────────────────────────
+# 语义（大小写不敏感的子串匹配，按此顺序）：
+#   1. location 为空 → 放行（不惩罚缺数据）
+#   2. 命中 block_hard → 一票否决（always_allow 也救不回来）
+#   3. 命中 always_allow → 放行（覆盖 block）
+#   4. 命中 block → 拒绝
+#   5. allow 为空 → 放行；allow 非空 → 必须命中至少一个
+#
+# 注意：location_filter 没有 enabled 字段，靠「这个块存在」启用。
+#      （只有 visa_filter 和 trust_filter 认 enabled）
+location_filter:
+  # 北京写法 + 真·全球远程强信号
+  always_allow:
+    - "北京"
+    - "北京市"
+    - "Beijing"
+    - "BJ"
+    - "Remote, Global"
+    - "Remote - Global"
+    - "Global Remote"
+    - "Worldwide"
+    - "Anywhere"
+  # 岗位 location 必须命中下列之一才进管道
+  allow:
+    - "北京"
+    - "Beijing"
+    - "BJ"
+    - "Remote"
+    - "remote"
+    - "远程"
+  # 一票否决：区域锁定的「远程」——这类岗位你在中国投不了。
+  # 说明：招聘里的 "Remote" 95% 是「某国境内远程」。
+  # 重要：block_hard 只匹配 location 字段；当 location 为空（= "N/A"）时
+  #       scan 会直接放行、根本不查这一层。所以 location 为空的板岗（如 HN、
+  #       部分 Ashby 板岗）只能靠禁用该板来堵，配置层拦不住。
+  # 本层覆盖三种写法：短横线 "Remote - US"、逗号 "Remote, EMEA"、括号 "Remote (Europe)"，
+  # 以及裸区域词（"USA only"、"North America & Europe"、(Americas) 等）。
+  block_hard:
+    # — 裸区域词：独立词即触发，自动覆盖 短横线/逗号/括号 所有形态 —
+    - "EMEA"
+    - "APAC"
+    - "LATAM"
+    - "Americas"
+    - "Latin America"
+    - "North America"
+    - "South America"
+    - "United States"
+    - "USA"
+    - "U.S."
+    - "U.S.A."
+    - "America"
+    - "Canada"
+    - "UK"
+    - "United Kingdom"
+    - "Britain"
+    - "Ireland"
+    - "Europe"
+    - "European"
+    - "Germany"
+    - "France"
+    - "Netherlands"
+    - "Belgium"
+    - "Spain"
+    - "Portugal"
+    - "Italy"
+    - "Poland"
+    - "Czech"
+    - "Sweden"
+    - "Norway"
+    - "Denmark"
+    - "Finland"
+    - "Switzerland"
+    - "Austria"
+    - "Israel"
+    - "Turkey"
+    - "Russia"
+    - "Ukraine"
+    - "Japan"
+    - "Korea"
+    - "Singapore"
+    - "Malaysia"
+    - "Thailand"
+    - "Vietnam"
+    - "Indonesia"
+    - "Philippines"
+    - "India"
+    - "Pakistan"
+    - "Bangladesh"
+    - "Australia"
+    - "New Zealand"
+    - "Asia"
+    - "Africa"
+    - "South Africa"
+    - "Johannesburg"
+    - "Cape Town"
+    - "Kenya"
+    - "Nairobi"
+    - "Nigeria"
+    - "Lagos"
+    - "Egypt"
+    - "Morocco"
+    - "Qatar"
+    - "Kuwait"
+    - "Bahrain"
+    - "Jordan"
+    - "Lebanon"
+    - "Dubai"
+    - "UAE"
+    - "Saudi Arabia"
+    - "Bay Area"
+    - "Silicon Valley"
+    - "New York"
+    - "San Francisco"
+    - "San Jose"
+    - "Seattle"
+    - "Austin"
+    - "Palo Alto"
+    - "Sunnyvale"
+    - "Los Angeles"
+    - "Boston"
+    - "Chicago"
+    - "Dallas"
+    - "Atlanta"
+    - "Denver"
+    - "Miami"
+    - "Houston"
+    - "Philadelphia"
+    - "Phoenix"
+    - "Minneapolis"
+    - "Detroit"
+    - "Washington DC"
+    - "Washington, DC"
+    - "Dublin"
+    - "London"
+    - "Berlin"
+    - "Paris"
+    - "Amsterdam"
+    - "Toronto"
+    - "Sydney"
+    - "Tokyo"
+    - "Bangalore"
+    - "Bengaluru"
+    - "Mumbai"
+    - "Delhi"
+    - "Hyderabad"
+    - "Chennai"
+    - "Pune"
+    # — 短横线形态（防御性）—
+    - "Remote - US"
+    - "Remote - USA"
+    - "Remote - United States"
+    - "US - Remote"
+    - "USA - Remote"
+    - "Remote - Canada"
+    - "Canada - Remote"
+    - "Remote - UK"
+    - "Remote - India"
+    - "Remote - Japan"
+    - "Remote - Singapore"
+    - "Remote - Australia"
+    - "Remote - Brazil"
+    - "Remote - Mexico"
+    - "Remote - Germany"
+    - "Remote - France"
+    - "Remote - Spain"
+    - "Remote - Italy"
+    - "Remote - Netherlands"
+    - "Remote - Poland"
+    - "Remote - Ireland"
+    - "Remote - Israel"
+    - "Remote - South Africa"
+    - "Remote-US"
+    - "Remote-EMEA"
+    - ", AMER"
+    # — 逗号形态（Ashby 系 "Remote, EMEA"）—
+    - "Remote, EMEA"
+    - "Remote, AMER"
+    - "Remote, APAC"
+    - "Remote, LATAM"
+    - "Remote, US"
+    - "Remote, USA"
+    - "Remote, Canada"
+    - "Remote, UK"
+    - "Remote, Europe"
+    - "Remote, India"
+    - "Remote, Singapore"
+    - "Remote, Japan"
+    - "Remote, Australia"
+    - "Remote, Brazil"
+    - "Remote, Mexico"
+    - "Remote, Bay Area"
+    # — 括号形态（RemoteOK / Working Nomads "Remote (Europe)"）—
+    - "Remote (US)"
+    - "Remote (USA)"
+    - "Remote (Europe)"
+    - "Remote (Americas)"
+    - "Remote (Canada)"
+    - "Remote (UK)"
+    - "Remote (India)"
+    - "Remote (Japan)"
+    - "Remote (Singapore)"
+    - "Remote (Australia)"
+    - "Remote (Germany)"
+    - "Remote (France)"
+    - "Remote (Brazil)"
+    - "Remote (Mexico)"
+    - "Remote (Spain)"
+    - "Remote (Italy)"
+    - "Remote (Netherlands)"
+    - "Remote (Poland)"
+    - "Remote (Ireland)"
+    - "Remote (Israel)"
+    - "Remote (LATAM)"
+    - "Remote (EMEA)"
+    - "Remote (APAC)"
+    - "Remote (North America)"
+    - "Remote (South America)"
+    # — 中文海外岗 —
+    - "驻海外"
+    - "常驻海外"
+    - "长期外派"
+    - "驻外"
+    - "海外base"
+    - "Overseas assignment"
+    - "Expat"
+    - "expatriate"
+    - "USA only"
+    # — 非远程形态：onsite / hybrid 一律拒 —
+    - "ONSITE"
+    - "Onsite"
+    - "On-site"
+    - "On site"
+    - "HYBRID"
+    - "Hybrid"
+    - "Headquarters"
+    - "HQ"
+  # 非北京的中国城市 + 所有境外地区：拒绝
+  block:
+    - "上海"
+    - "Shanghai"
+    - "深圳"
+    - "Shenzhen"
+    - "杭州"
+    - "Hangzhou"
+    - "广州"
+    - "Guangzhou"
+    - "成都"
+    - "Chengdu"
+    - "南京"
+    - "Nanjing"
+    - "苏州"
+    - "Suzhou"
+    - "武汉"
+    - "Wuhan"
+    - "西安"
+    - "Xi'an"
+    - "天津"
+    - "Tianjin"
+    - "重庆"
+    - "Chongqing"
+    - "香港"
+    - "Hong Kong"
+    - "台湾"
+    - "Taiwan"
+    - "United States"
+    - "USA"
+    - "U.S."
+    - "Canada"
+    - "Mexico"
+    - "Brazil"
+    - "Argentina"
+    - "Colombia"
+    - "Chile"
+    - "United Kingdom"
+    - "UK"
+    - "Britain"
+    - "Ireland"
+    - "Germany"
+    - "France"
+    - "Netherlands"
+    - "Belgium"
+    - "Spain"
+    - "Portugal"
+    - "Italy"
+    - "Poland"
+    - "Czech"
+    - "Sweden"
+    - "Norway"
+    - "Denmark"
+    - "Finland"
+    - "Switzerland"
+    - "Austria"
+    - "Israel"
+    - "Turkey"
+    - "Russia"
+    - "Ukraine"
+    - "Japan"
+    - "Korea"
+    - "Singapore"
+    - "Malaysia"
+    - "Thailand"
+    - "Vietnam"
+    - "Indonesia"
+    - "Philippines"
+    - "India"
+    - "Pakistan"
+    - "Bangladesh"
+    - "Dubai"
+    - "UAE"
+    - "Saudi Arabia"
+    # -- 非洲 / 中东（2026-10-01 实跑发现 Canva 漏出南非岗）--
+    - "Africa"
+    - "South Africa"
+    - "Johannesburg"
+    - "Cape Town"
+    - "Kenya"
+    - "Nairobi"
+    - "Nigeria"
+    - "Lagos"
+    - "Egypt"
+    - "Morocco"
+    - "Qatar"
+    - "Kuwait"
+    - "Bahrain"
+    - "Jordan"
+    - "Lebanon"
+    - "Australia"
+    - "New Zealand"
+    - "Mountain View"
+    - "San Francisco"
+    - "Seattle"
+    - "New York"
+    - "Austin"
+    - "Palo Alto"
+    - "Sunnyvale"
+    # -- 美国主要城市 / 都会区（2026-10-01 实跑发现）--
+    # 为什么需要：Ashby provider 会把地址里的城市折进 location，
+    # 但有些岗位只给城市不给国家（如 Harvey 的 "Washington DC · Remote"），
+    # 只靠上面的 "United States" 拦不住。这里补齐常见美国地名。
+    - "Washington DC"
+    - "Washington, DC"
+    - "Washington D.C."
+    - "Washington"
+    - "San Jose"
+    - "Santa Clara"
+    - "Cupertino"
+    - "Menlo Park"
+    - "Los Angeles"
+    - "San Diego"
+    - "Santa Monica"
+    - "Culver City"
+    - "Pasadena"
+    - "Irvine"
+    - "Oakland"
+    - "Berkeley"
+    - "Sacramento"
+    - "Denver"
+    - "Chicago"
+    - "Boston"
+    - "Cambridge, MA"
+    - "Atlanta"
+    - "Dallas"
+    - "Houston"
+    - "Miami"
+    - "Philadelphia"
+    - "Phoenix"
+    - "Portland"
+    - "Minneapolis"
+    - "Detroit"
+    - "Raleigh"
+    - "Charlotte"
+    - "Nashville"
+    - "Columbus"
+    - "Indianapolis"
+    - "Cleveland"
+    - "Pittsburgh"
+    - "Baltimore"
+    - "Richmond"
+    - "Orlando"
+    - "Tampa"
+    - "Bellevue"
+    - "Redmond"
+    - "Salt Lake"
+    - "Arlington"
+    - "Alexandria"
+    - "Reston"
+    - "McLean"
+    - "Bethesda"
+    - "New Jersey"
+    - "Texas"
+    - "California"
+    - "Massachusetts"
+    - "Illinois"
+    - "Virginia"
+    - "Colorado"
+    - "Georgia, USA"
+    - "Florida"
+    - "Ohio"
+    - "Michigan"
+    - "Arizona"
+    - "Oregon"
+    - "Pennsylvania"
+    - "North Carolina"
+    - "South Carolina"
+    - "Tennessee"
+    - "Missouri"
+    - "Minnesota"
+    - "Utah"
+    - "Nevada"
+    - "Connecticut"
+    - "Maryland"
+    - "Wisconsin"
+    - "Indiana"
+    - "Iowa"
+    - "Kansas"
+    - "Kentucky"
+    - "Louisiana"
+    - "Alabama"
+    - "Oklahoma"
+    - "Nebraska"
+    - "New Mexico"
+    - "Hawaii"
+    - "Alaska"
+    - "Idaho"
+    - "Arkansas"
+    - "Mississippi"
+    - "Montana"
+    - "Wyoming"
+    - "Delaware"
+    - "Vermont"
+    - "New Hampshire"
+    - "Maine"
+    - "Rhode Island"
+    - "West Virginia"
+    - "North Dakota"
+    - "South Dakota"
+    - "London"
+    - "Berlin"
+    - "Paris"
+    - "Amsterdam"
+    - "Tokyo"
+    - "Seoul"
+    - "Bangalore"
+    - "Sydney"
+    - "Toronto"
+    - "Vancouver"
+
+# ── 发布时效过滤（可选）──────────────────────────────────────────────
+# 只保留近 15 天发布的岗位。provider 不提供发布日期的岗位不会被跳过
+# （「不惩罚缺数据」原则）。设为 0 或删掉即关闭。
+max_posting_age_days: 15
+
+# ── 标题过滤 ────────────────────────────────────────────────────────
+# 命中规则：至少 1 个 positive 命中，且 0 个 negative 命中（大小写不敏感）。
+# 匹配细节：
+#   - 2-3 个字母的词（"AI"/"ML"）自动按整词匹配，不会命中 "Maintenance" 里的 AI
+#   - 4 个字母以上按子串匹配（"Agent" 也会命中 "Agentic"，符合预期）
+#   - 前缀 word: 全词匹配；stem: 只锚左边界
+#   - " + " 要求多个词同时出现（任意顺序）
+title_filter:
+  positive:
+    # -- 你的核心岗位方向 --
+    - "解决方案"
+    - "售前"
+    - "Presales"
+    - "Pre-sales"
+    - "Solutions"
+    - "Solution"
+    - "Forward Deployed"
+    - "解决方案架构"
+    - "SA"
+    # -- AI / 大模型 --
+    - "Agent"
+    - "AI"
+    - "大模型"
+    - "RAG"
+    - "rag"
+    - "工作流"
+    - "workflow"
+    - "vibecoding"
+    # -- 商业化 / 生态 / 客户 --
+    
+    - "To B"
+    - "ToB"
+    - "政企"
+    - "BD"
+    - "商业化"
+    - "国央企"
+    - "部委"
+  negative:
+    # -- 级别不符 --
+    - "实习"
+    - "应届"
+    - "兼职"
+    - "校园"
+    - "培训生"
+    - "Trainee"
+    - "校招"
+    - "senior"
+    # -- 职能不符 --
+    - "电话销售"
+    - "电销"
+    - "BPO"
+    - "数据标注"
+    - "标注"
+    - "客服"
+    - "外包"
+    - "众包"
+    - "运营助理"
+    - "内容审核"
+    - "审核专员"
+    # -- 整词锚定：避免 "Intern" 误伤 "Internal" / "International" --
+    - "word:Intern"
+    - "word:Interns"
+    - "Internship"
+# ── 内容过滤（职位描述正文，可选）────────────────────────────────────
+# 读 JD 正文，而不是只看标题。适合「标题宽泛但方向不符」的岗位。
+# 注意：只有 list 接口免费返回 description 的 provider 才有信号；
+#      没有 description 的岗位一律放行（不会被静默丢弃）。
+# 已开启：确保"解决方案/AI"的岗位真的提到 ToB / 大模型 / 交付。
+content_filter:
+  positive:
+    - "大模型"
+    - "LLM"
+    - "人工智能"
+    - "AI"
+    - "机器学习"
+    - "解决方案"
+    - "To B"
+    - "ToB"
+    - "企业客户"
+    - "政企"
+    - "交付"
+    - "客户成功"
+    - "产品经理"
+    - "FDE（应用项）"
+    - "客户成功"
+    - "商业化"
+
+# ── 国家准入过滤（可选）──────────────────────────────────────────────
+# 很多美国公司把远程岗标成 "Remote"，真实准入限制只写在 JD 正文里。
+# 这里读正文，命中 exclusionary 且未命中 inclusive 的岗位被拒。
+country_eligibility_filter:
+  exclusionary:
+    - "must be located in the united states"
+    - "us-based candidates only"
+    - "authorized to work in the us without sponsorship"
+    - "must reside in the united states"
+    - "only candidates located in the us"
+    - "eligible to work in the united states"
+  inclusive:
+    - "united states or canada"
+    - "north america"
+    - "canada eligible"
+    - "asia"
+    - "apac"
+    - "global"
+
+# ── 信任过滤（可选）────────────────────────────────────────────────
+# 给每个岗位打 0-100 信任分并标注风险，但从不丢弃岗位。
+trust_filter:
+  enabled: true
+  suspicious_domains:
+    - "bit.ly"
+    - "tinyurl.com"
+    - "t.co"
+    - "forms.gle"
+    - "goo.gl"
+    - "shorturl.at"
+
+# ── WebSearch 广撒网（第 4 层策略）──────────────────────────────────
+# 每条触发一次搜索，靠上面的 location_filter 兜住「北京 / 真全球远程」。
+# 定向中国市场的三条默认启用；欧美板保留但禁用（对你的准入价值低）。
+search_queries:
+  # -- 中国市场定向（启用）--
+  - name: Greenhouse — China Solutions/Presales
+    query: 'site:boards.greenhouse.io OR site:job-boards.greenhouse.io ("Solutions Architect" OR "Solutions Engineer" OR "Pre-sales" OR "Forward Deployed") ("China" OR "Beijing")'
+    enabled: true
+
+  - name: Ashby — China AI/Solutions
+    query: 'site:jobs.ashbyhq.com ("AI Solutions" OR "Solutions Architect" OR "Pre-sales") ("China" OR "Beijing")'
+    enabled: true
+
+  - name: Lever — China AI/Solutions
+    query: 'site:jobs.lever.co ("AI Solutions" OR "Solutions Engineer" OR "Pre-sales") ("China" OR "Beijing")'
+    enabled: true
+
+  - name: 中国大厂 — 大模型解决方案
+    query: '"大模型" ("解决方案" OR "售前" OR "解决方案架构师") 北京 招聘'
+    enabled: true
+
+  # -- 全球远程（启用，配 location_filter 兜底）--
+  - name: Greenhouse — Global Remote AI
+    query: 'site:job-boards.greenhouse.io ("Solutions Architect" OR "Forward Deployed" OR "AI Engineer") "Remote" ("Global" OR "Worldwide" OR "Anywhere")'
+    enabled: true
+
+  - name: Ashby — Global Remote AI
+    query: 'site:jobs.ashbyhq.com ("Solutions" OR "Forward Deployed") "Remote" ("Global" OR "Worldwide" OR "Anywhere")'
+    enabled: true
+
+  - name: YC Jobs — Remote Solutions/AI
+    query: 'site:workatastartup.com OR site:ycombinator.com/jobs ("Forward Deployed" OR "Solutions Architect" OR "AI Engineer") remote'
+    enabled: true
+
+  # -- 欧美本地板（禁用：对你的准入几乎零价值，需要时再开）--
+  - name: Remotive — AI/SA/FDE
+    query: 'site:remotive.com "AI Engineer" OR "Solutions Architect" OR "Forward Deployed" remote'
+    enabled: false
+
+  - name: WeWorkRemotely — AI & DX
+    query: 'site:weworkremotely.com "AI" OR "Solutions Engineer" OR "Forward Deployed"'
+    enabled: false
+
+  - name: 土耳其/西班牙/德国本地板（模板自带示例）
+    query: 'site:kariyer.net OR site:getmanfred.com OR site:tecnoempleo.com "Solutions Architect" OR "AI Engineer"'
+    enabled: false
+
+# ── 追踪公司 ────────────────────────────────────────────────────────
+# 每个条目 = 一个雇主。不写 provider 时由 careers_url 自动识别。
+# 实测状态见 notes（2026-10-01）。
+tracked_companies:
+
+  # ══ 中国大厂（JobHunt-CLI local_parser）══════════════════════════
+  # 说明：走本地解析器桥接 JobHunt-CLI（scan_method: local_parser）。
+  # 脚本 local/scripts/jobhunt_bridge.py（gitignored）用 subprocess 调 CLI，
+  # 输出 jobs-json-v1 到 stdout。timeout_ms 放宽是因为 npx 冷启动 + 官网抓取
+  # 可能超过默认 20s。
+
+  - name: 美团 (Meituan)
+    careers_url: https://zhaopin.meituan.com
+    scan_method: local_parser
+    parser:
+      command: python3
+      script: local/scripts/jobhunt_bridge.py
+      format: jobs-json-v1
+      timeout_ms: 150000
+    enabled: true
+    notes: "JobHunt-CLI 桥接。默认关键词已对齐画像：解决方案/售前/AI/大模型（社招），每词上限 30、按 URL 去重。改关键词/上限：脚本支持 argv 或 JOBHUNT_QUERY/JOBHUNT_LIMIT 环境变量。"
+
+  # ══ 中国 AI 独角兽 / 大模型公司 ══════════════════════════════════
+  # 说明：这几家走 MokaHR / 飞书 ATS，已实测能爬通。
+
+  - name: DeepSeek
+    careers_url: https://app.mokahr.com/social-recruitment/high-flyer/140576
+    keywords: ["大模型", "AI", "解决方案", "Agent"]
+    max_pages: 10
+    enabled: true
+    notes: "MokaHR。实测 13 live。"
+
+  - name: 月之暗面 Kimi
+    careers_url: https://app.mokahr.com/social-recruitment/moonshot/148506
+    keywords: ["大模型", "AI", "解决方案", "Agent"]
+    max_pages: 10
+    enabled: true
+    notes: "MokaHR。实测 31 live。"
+
+  - name: 智谱 AI
+    careers_url: https://app.mokahr.com/social-recruitment/zphz/148983
+    keywords: ["大模型", "AI", "解决方案", "Agent"]
+    max_pages: 10
+    enabled: true
+    notes: "MokaHR。实测 60 live。"
+
+  - name: MiniMax 稀宇极智
+    careers_url: https://vrfi1sk8a0.jobs.feishu.cn
+    keywords: ["大模型", "AI", "解决方案"]
+    max_pages: 20
+    enabled: true
+    notes: "feishu-jobs。实测 151 live。"
+
+  - name: 百川智能
+    careers_url: https://cq6qe6bvfr6.jobs.feishu.cn
+    keywords: ["大模型", "AI", "解决方案", "产品", "运营"]
+    max_pages: 10
+    enabled: true
+    notes: "feishu-jobs。官网 careers.baichuan-inc.com 跳转到此。实测 14 live，全在北京（AI医疗产品经理/Agent研发/医疗生态合作等）。"
+
+  - name: 零一万物 01.AI
+    careers_url: https://01ai.jobs.feishu.cn
+    keywords: ["大模型", "AI", "解决方案", "产品", "运营"]
+    max_pages: 10
+    enabled: true
+    notes: "feishu-jobs。实测 50 live，主体在北京（36 岗）。企业级 Agent / 万智平台方向。"
+
+  - name: 阶跃星辰 StepFun
+    careers_url: https://app.mokahr.com/social-recruitment/step/94906
+    keywords: ["大模型", "AI", "解决方案", "产品", "运营"]
+    max_pages: 10
+    enabled: true
+    notes: "mokahr（org=step）。实测 98 live。注意：slug 是 step 不是 stepfun，猜错会返回「未找到对应的官网」。"
+
+  # ══ 端侧 / 多模态 / 具身 AI（北京）══════════════════════════════
+  # 说明：这几家都是北京总部、走飞书 ATS，实测可爬。
+
+  - name: 面壁智能 ModelBest
+    careers_url: https://modelbest.jobs.feishu.cn
+    keywords: ["大模型", "AI", "解决方案", "产品"]
+    max_pages: 10
+    enabled: true
+    notes: "feishu-jobs。实测 96 live。端侧 MiniCPM 方向，北京总部（官网仅留邮箱，飞书是唯一可爬入口）。"
+
+  - name: 生数科技
+    careers_url: https://shengshu.jobs.feishu.cn
+    keywords: ["大模型", "AI", "解决方案", "产品"]
+    max_pages: 10
+    enabled: true
+    notes: "feishu-jobs。实测 100 live。视频生成大模型方向。"
+
+  - name: 无问芯穹
+    careers_url: https://infinigence.jobs.feishu.cn
+    keywords: ["大模型", "AI", "解决方案", "产品"]
+    max_pages: 10
+    enabled: true
+    notes: "feishu-jobs。实测 60 live。AI Infra / 算力方向。"
+
+  - name: 商汤科技 SenseTime
+    careers_url: https://sensetime.jobs.feishu.cn
+    keywords: ["大模型", "AI", "解决方案", "售前", "产品"]
+    max_pages: 15
+    enabled: true
+    notes: "feishu-jobs。实测 84 live。注意：官网 hr.sensetime.com 是自建 ATS（项目无 provider），飞书这个子域才是可爬入口。"
+
+  # ══ 中国大厂 / 云厂商 ════════════════════════════════════════════
+  # 说明：腾讯/美团/阿里/字节走自建 ATS，各有专用 provider。
+  #      keywords 交给服务端查询，结果自动去重。
+
+  - name: 腾讯
+    careers_url: https://careers.tencent.com/search.html
+    keywords: ["大模型", "AI", "解决方案", "售前", "政企"]
+    max_pages: 20
+    enabled: true
+    notes: "tencent provider。实测 299 live（政企 keyword 曾 page1 failed）。"
+
+  - name: 美团
+    careers_url: https://zhaopin.meituan.com/web/social
+    keywords: ["大模型", "AI", "解决方案", "售前", "商务"]
+    max_pages: 20
+    enabled: true
+    notes: "meituan provider。实测 289 live（商务 keyword 曾 page1 failed）。"
+
+  - name: 阿里巴巴
+    careers_url: https://talent.alibaba.com/off-campus/position-list
+    keywords: ["大模型", "AI", "解决方案", "售前", "商业化"]
+    max_pages: 25
+    enabled: true
+    notes: "alibaba provider。实测 294 live（商业化 keyword 曾 page1 failed）。"
+
+  - name: 字节跳动
+    careers_url: https://jobs.bytedance.com
+    keywords: ["大模型", "AI", "解决方案", "售前", "火山"]
+    max_pages: 20
+    enabled: true
+    notes: "feishu-jobs provider。实测 354 live（火山 keyword 曾 page1 failed）。"
+
+  # ══ 智能驾驶 / 出行（北京总部）════════════════════════════════════
+
+  - name: 蔚来 NIO
+    careers_url: https://nio.jobs.feishu.cn
+    keywords: ["AI", "解决方案", "大模型"]
+    max_pages: 20
+    enabled: true
+    notes: "feishu-jobs。实测 351 live。"
+
+  - name: Momenta
+    careers_url: https://momenta.jobs.feishu.cn
+    keywords: ["AI", "解决方案", "大模型"]
+    max_pages: 20
+    enabled: true
+    notes: "feishu-jobs。实测 127 live。"
+
+  - name: 理想汽车
+    careers_url: https://li.jobs.feishu.cn
+    keywords: ["AI", "解决方案", "大模型", "产品"]
+    max_pages: 20
+    enabled: true
+    notes: "feishu-jobs。实测 188 live。北京总部，智驾/座舱 Agent 方向。"
+
+  # ══ 外企（实测有北京岗位）════════════════════════════════════════
+  # 说明：只有 3 家实测有北京岗。其余外企北京=0，未收录。
+
+  - name: MongoDB
+    careers_url: https://boards.greenhouse.io/mongodb
+    api: https://boards-api.greenhouse.io/v1/boards/mongodb/jobs
+    enabled: true
+    notes: "Greenhouse。实测 394 live，其中 5 个含 Beijing（Enterprise AE / OEM）。"
+
+  - name: Canva
+    careers_url: https://careers.smartrecruiters.com/canva
+    keywords: ["Product", "Program", "Solutions", "AI"]
+    enabled: true
+    notes: "SmartRecruiters。实测 100 live，其中 2 个 Beijing（CJKI Product PM）。"
+
+  - name: Snowflake
+    careers_url: https://jobs.ashbyhq.com/snowflake
+    enabled: true
+    notes: "Ashby。实测 347 live。唯一的北京岗（Director, Partners & Alliances - China）发布于 205 天前，被时效过滤拦掉；保留以捕捉后续新岗。"
+
+  # ══ 外企（实测有「真·全球远程」岗位）══════════════════════════════
+  # 说明：这些公司的 Remote 不带区域限定，你在中国可投。
+
+  - name: Supabase
+    careers_url: https://jobs.ashbyhq.com/supabase
+    enabled: true
+    notes: "Ashby。48 live。经 block_hard 修复后剩 7 个 'Remote, Global'（真全球远程，如 TAM Leader / Platform Engineer）。"
+
+  - name: Cursor (Anysphere)
+    careers_url: https://jobs.ashbyhq.com/cursor
+    enabled: true
+    notes: "Ashby。131 live。22 个远程岗的地址折进来后都含美国，属区域锁定，已被拦掉 → 当前 0 条可投。保留以捕捉后续新增。"
+
+  - name: Harvey
+    careers_url: https://jobs.ashbyhq.com/harvey
+    enabled: true
+    notes: "Ashby。307 live。远程岗折进地址后为 US / Mexico / Korea（含 'Washington DC · Remote'），属区域锁定，已被拦掉 → 当前 0 条可投。保留以捕捉后续新增。"
+
+  - name: GitLab
+    careers_url: https://boards.greenhouse.io/gitlab
+    api: https://boards-api.greenhouse.io/v1/boards/gitlab/jobs
+    enabled: true
+    notes: "Greenhouse。203 live，7 个无区域限定 Remote（178 个远程多为区域锁定，已被 block_hard 拦掉）。"
+
+  # ══ 确认爬不通（已逐一实测，不是猜测）════════════════════════════
+  # 这些公司有北京岗位，但技术上本项目抓不到。原因分三类：
+  #
+  # A. 自建 ATS，项目无对应 provider
+  #    - 科大讯飞  iflytek.zhiye.com        （北森 zhiye.com 系）
+  #    - 京东      zhaopin.jd.com           （自建）
+  #    - 第四范式  www.4paradigm.com        （官网落地页，无公开 API）
+  #    出路：写一个 local-parser（见项目 local-parser-cookbook），成本较高。
+  #
+  # B. 飞书/Moka 子域不存在（撞库返回 HTTP 400 / 「未找到对应的官网」）
+  #    - 宇树 Unitree / 智元 AgiBot / 快手 / 小红书 / 滴滴 /
+  #      蚂蚁 / 百度 / 小米 / 知乎 / 旷视 / 联想
+  #    说明：它们要么用自建 ATS，要么飞书子域不是公司英文名。
+  #
+  # C. 已用别的入口收进来的（不重复）
+  #    - 商汤 → 走 sensetime.jobs.feishu.cn（上面已收）
+  #    - 面壁 → 走 modelbest.jobs.feishu.cn（上面已收）
+  #    - 阶跃 → 走 app.mokahr.com/.../step/94906（上面已收）
+
+
+# ── 公司别名归一（跨源同司不同名时合并去重键）─────────────────────
+# 格式：{ 规范名: [别名, ...] }。scan.mjs 与 cn_bridge 都按此归一公司名，
+# 使同一公司在 Hiring-Radar / job-pro / 原生 provider 下的不同写法折叠为
+# 同一去重键。未知名按小写原文透传，不影响没登记的条目。
+company_aliases:
+  ByteDance: ["字节跳动", "字节", "bytedance"]
+  Tencent: ["腾讯", "tencent"]
+  Alibaba: ["阿里巴巴", "阿里", "alibaba"]
+  Meituan: ["美团", "meituan"]
+  DeepSeek: ["深度求索", "deepseek"]
+  "Moonshot AI": ["月之暗面", "kimi", "moonshot"]
+  "Zhipu AI": ["智谱", "智谱 ai", "zhipu"]
+  MiniMax: ["稀宇极智", "minimax"]
+  Baichuan: ["百川智能", "百川", "baichuan"]
+  "01.AI": ["零一万物", "yi", "01ai"]
+  StepFun: ["阶跃星辰", "阶跃", "step", "stepfun"]
+  ModelBest: ["面壁智能", "面壁", "modelbest"]
+  Shengshu: ["生数科技", "生数", "shengshu"]
+  Infinigence: ["无问芯穹", "无问", "infinigence"]
+  SenseTime: ["商汤科技", "商汤", "sensetime"]
+  NIO: ["蔚来", "nio"]
+  Momenta: ["momenta"]
+  "Li Auto": ["理想汽车", "理想", "lixiang", "liauto"]
+
+# ── 中国岗位外部 CLI 源（Hiring-Radar + job-pro）───────────────────
+# 这两个源都不直接进 job_boards 跑：由 local/scripts/cn_bridge.mjs 采集、
+# 差集调度、按唯一键去重后落到 data/cn-jobs.json 缓存；scan.mjs 只通过下面
+# job_boards 里的只读 local-parser 读缓存（见文件末尾 cn-jobs 条目）。
+# scan.mjs 本身不读这个顶层块——它是 cn_bridge.mjs 的唯一配置来源。
+# 采集命令（带外刷新缓存，scan 绝不跑这些重 CLI）：
+#   node local/scripts/cn_bridge.mjs            采集→去重→写 data/cn-jobs.json
+#   node local/scripts/cn_bridge.mjs --dry-run  只报告，不写文件
+#   node local/scripts/cn_bridge.mjs --json     机器可读摘要
+#   node local/scripts/cn_bridge.mjs --check    就绪体检（不写文件）：逐项探测
+#       python/npx、hiring_radar.py 是否存在、pycryptodome、Chrome、缓存、
+#       以及 job_boards 只读条目接线；有 FAIL 才非零退出，WARN/INFO 可忽略。
+# 两个源都支持的可选键（写在各自块里即可）：
+#   dir         命令的工作目录（默认仓库根）——让 hiring_radar.py 待在自己的
+#               clone 里，不必复制到根。环境变量覆盖：HIRING_RADAR_DIR / JOB_PRO_DIR
+#   timeout_ms  单次命令超时（默认 CN_BRIDGE_TIMEOUT_MS 或 180000）
+# hiring_radar 另支持 keywords: [..] → 拼成 `--keyword a,b,c` 提前收窄全量。
+cn_sources:
+  enabled: true
+  cache: data/cn-jobs.json
+  dedup:
+    unique_key: "{company}|{title_norm}|{location_norm}"
+    # 同一唯一键多源命中时保留优先级最高的一条。native=原生 provider（这些
+    # 公司在下面 exclude_companies 已整体排除，缓存里不会出现，列在此处仅
+    # 为语义完整）；job-pro 精确度高于聚合的 hiring-radar。
+    prefer: [native, job-pro, hiring-radar, websearch]
+  # 凡 tracked_companies 里已有原生 provider 的中国公司，全部列这里，禁止
+  # 两个 CLI 源重复抓取。规则：凡是 tracked_companies 中 provider ∈
+  # {feishu-jobs, mokahr, tencent, meituan, alibaba} 或 careers_url 命中中国
+  # ATS 域名（*.jobs.feishu.cn / app.mokahr.com / careers.tencent.com /
+  # zhaopin.meituan.com / talent.alibaba.com / jobs.bytedance.com /
+  # *.zhiye.com）的公司，cn_bridge.mjs 会扫描并自动并入本列表（用规范名，
+  # 经 company_aliases 归一）——下面这份是扫描结果的显式快照，便于人工核对。
+  exclude_companies:
+    - ByteDance
+    - DeepSeek
+    - Moonshot AI
+    - Zhipu AI
+    - MiniMax
+    - Baichuan
+    - 01.AI
+    - StepFun
+    - ModelBest
+    - Shengshu
+    - Infinigence
+    - SenseTime
+    - Tencent
+    - Meituan
+    - Alibaba
+    - NIO
+    - Momenta
+    - Li Auto
+  hiring_radar:
+    # 唯一全量入口。本 CLI 无“一次拉全量”的命令：--local <key> 只跑一个解析器，
+    # 中国 170 家 = hiring_radar.py --list 里 “--local：N” 那一段的全部 key（由
+    # parsers/companies.seed 注入）。故 cn_bridge 会：先 --list 枚举 key，再逐个
+    # `--local <key> --json`（--json 出 {source,total,matched,jobs:[...]}，桥接取 jobs
+    # 数组、映 15 字段）；单 key 失败（如 Moka 未装 pycryptodome、站点超时）不阻断整轮。
+    command: "python3 hiring_radar.py"   # 基础命令；--local/--json 由桥接逐 key 拼接
+    companies: all                        # all → 枚举到的全部 key；也可写 [key1, key2]
+    dir: local/Hiring-Radar               # 已 clone 到此（gitignored）；或设 HIRING_RADAR_DIR
+    # keywords: ["AI", "大模型", "Agent"]  # 可选：拼成 --keyword 跨 170 个解析器预筛（大幅降量）
+    # limit: 20                           # 可选：只查前 N 个 key（冒烟测试用；CLI --limit 同效）
+    # timeout_ms: 180000                  # 可选：--list 超时
+    # per_company_timeout_ms: 60000       # 可选：单 key 超时（默认 60s）
+  job_pro:
+    # 只补差集：companies: auto-diff → 仅跑 Hiring-Radar 未覆盖的公司。
+    # 差集 = (job-pro `list` 的公司) − (Hiring-Radar 已产出的公司)，均按规范名比较。
+    command: "npx @ha7ch/job-pro@latest"
+    companies: auto-diff
+    keywords: ["AI", "大模型", "Agent"]
+    scope: all               # job-pro 仅支持 campus / intern / all（“social” 无效，实测报错）
+    # ── JD 正文富化（进程内直调，走 local/scripts/enrich-details.mjs）─────
+    # 旧路径逐条 spawn `npx @ha7ch/job-pro detail <id>`，实测 ~2.8s/条，且那是
+    # 进程启动开销不是网络；差集按千计条 → 小时级。现改为每家一个子进程，
+    # 在进程内 import dist/<slug>.js 直调 fetchPositionDetail，实测 89–111ms/条。
+    fetch_details: true                              # false 则只保留元数据行
+    enrich_script: local/scripts/enrich-details.mjs
+    package_root: local/node_modules/@ha7ch/job-pro   # 钉版本副本：npm install --prefix local @ha7ch/job-pro@1.2.1
+    enrich_store_dir: local/cache                     # 每家一个续跑 store：jobpro-enriched-<slug>.json
+    detail_limit: 0                                   # 每家富化上限（0 = 不限；冒烟可临时设 20）
+    detail_concurrency: 3                             # 一般家族并发（硬上限 8）
+    moka_concurrency: 2                               # 命中 slow_families 的家族降到此并发
+    slow_families: [moka]                             # 按 dist/<slug>.js 的 import 自动判定家族（实测 ~700ms/条）
+    detail_jitter_ms: 200                             # 每条之间 0-Nms 随机抖动，避免贴脸请求
+    jd_max_age_days: 14                               # 正文新鲜期：store 里 fetched_at 在期内则跳过，不重打上游
+    detail_retries: 2                                 # 失败重试次数（指数退避；429 退避下限更长并额外冷却）
+    checkpoint_every: 20                              # 子进程每 N 条原子落盘一次 store（中断可续跑）
+    detail_timeout_ms: 30000                          # 单条上限（客户端侧 race，不改上游函数签名）
+    enrich_timeout_ms: 900000                         # 单家子进程整体上限（15 分钟）
+    # dir: .                        # 可选：命令工作目录（npx 全局装通常不需要）
+    # timeout_ms: 180000            # 可选
+
+# ── 招聘板 / 聚合站 ─────────────────────────────────────────────────
+# 一个条目 = 一个多雇主平台。同款 title/location 过滤与去重照常生效。
+job_boards:
+
+  # ── 中国岗位缓存（只读 local-parser，喂 scan.mjs）─────────────────
+  # 由 local/scripts/cn_bridge.mjs 采集/去重后写入 data/cn-jobs.json；本条目
+  # 仅用只读 local-parser 把缓存原样吐给 scan，绝不重跑任何外部 CLI。
+  # 岗位级过滤（title/location/content）与去重仍由 scan.mjs 统一执行。
+  - name: 中国岗位缓存 (cn-jobs)
+    scan_method: local_parser
+    parser:
+      command: node
+      script: local/scripts/cn_cache_reader.mjs
+      format: jobs-json-v1
+      timeout_ms: 60000
+      # 全量缓存可达 ~2 万行、reader 一次吐 ~30MB；local-parser 默认
+      # max_buffer_bytes 仅 2MB，会撞 ENOBUFS 导致本板返回 0 条。这里按 provider
+      # 自身支持的数据配置（providers/local-parser.mjs 读 parser.max_buffer_bytes）
+      # 把上限抬到 128MB，无需改系统层 provider。
+      max_buffer_bytes: 134217728
+    enabled: true
+    notes: "只读缓存桥接：读 data/cn-jobs.json（Hiring-Radar 全量 + job-pro 差集，已按公司别名与职位唯一键去重、排除原生 provider 中国公司）。采集请用 node local/scripts/cn_bridge.mjs 刷新缓存；缓存为空时本条目输出 0 条、不影响其它源。"
+
+  # -- 波兰市场（模板自带，对你的准入无价值，保留禁用）--
+  - name: SolidJobs IT
+    careers_url: https://solid.jobs/public-api/offers/it?campaign=career-ops
+    provider: solidjobs
+    enabled: false
+    notes: "波兰 IT 板。原本启用但实测 500 条全在波兰，对北京准入零价值，已禁用。"
+
+  # ── 全球远程聚合板（provider 直连，scan.mjs 自动跑）──────────────
+  # 这些板全部远程岗，location 字段标了区域。靠上面的 location_filter +
+  # block_hard（Remote - US / EMEA / APAC 等区域锁定全部拦掉）只留真全球远程。
+  # 这是样例 search_queries 想覆盖、但 scan 不读 search_queries 的"替代实现"。
+
+  - name: RemoteOK
+    provider: remoteok
+    enabled: true
+    notes: "全板 feed（latest ~100）。实测 99 条里 63 条命中 AI/产品/运营。location 如 'Remote - US' / 'Worldwide'。"
+
+  - name: WeWorkRemotely
+    provider: weworkremotely
+    enabled: false
+    notes: "全板 RSS。但从数据中心 IP 被 Cloudflare 403（浏览器 UA 直连也 403），环境层无解，禁用。需要时换住宅代理或本地跑。"
+
+  - name: Himalayas
+    provider: himalayas
+    enabled: true
+    notes: "全板 feed（himalayas.app）。locationRestrictions 带区域。"
+
+  - name: Remotive
+    provider: remotive
+    enabled: true
+    notes: "全板 feed。candidate_required_location 如 'Remote, USA' / 'Anywhere'。"
+
+  - name: Working Nomads
+    provider: workingnomads
+    enabled: true
+    notes: "全板 feed。location 如 'Remote' / 'Worldwide'。"
+
+  - name: Hacker News — Who is Hiring
+    provider: hackernews
+    enabled: false
+    notes: "HN 月度招聘帖。location 恒为空，而 scan 的 location_filter 对空 location 直接放行、不查 block_hard（标题里的 '(Americas)'/'USA only' 拦不住）→ 区域锁定岗大量漏网。已禁用；要启用需本地跑并人工筛。"
+
+# ── 变更记录 ────────────────────────────────────────────────────────
+# 2026-10-01 v3（本轮：P1 全球远程聚合板 + 修 filter 盲区）
+#   1. 【新增】4 个全球远程聚合板（provider 直连，scan.mjs 自动跑）：
+#        RemoteOK / Himalayas / Remotive / Working Nomads。
+#   2. 【禁用】WeWorkRemotely（数据中心 IP 被 Cloudflare 403，环境层无解）
+#        + Hacker News（location 恒为空，scan 对空 location 直接放行、
+#        不查 block_hard，导致 "(Americas)"/"USA only" 等区域锁定岗大量漏网）。
+#   3. 【修复·严重】block_hard 原只覆盖 "Remote - X"/"Remote, X" 形态，
+#        漏掉 "Remote (Europe)"（括号）、"USA only"、"Americas"、
+#        "North America & Europe" 等。已扩成「区域词全量拦截」版
+#        （裸区域词 + 短横线 + 逗号 + 括号 四形态 + onsite/hybrid 全拒）。
+#        注意：此修只对 location 有值的岗位生效。
+#   4. 【遗留·架构层】scan 的 location_filter 对空 location 直接 return true
+#        （不查 block_hard/block），且 block_hard 不看标题。因此板岗里
+#        location 为空的，区域锁定信息藏在标题里也拦不住（如某保加利亚岗）。
+#        这是 scan 代码限制，配置层无解；板岗需人工过一眼。
+#   5. 【澄清·重要】样例的 search_queries 顶层键 scan.mjs 根本不读——
+#        它只处理 companies + boards。那些聚合搜索是给「AI 求职智能体」
+#        手动跑 websearch 用的。所以样例「216 源」里有 49 个是 scan 不跑的。
+#        真实自动跑源差距：样例 142 公司 + 25 板 = 167，本版 25 公司 + 4 板 = 29。
+#   6. 【效果】全量 dry-run：12,213 原始 → 444 条可投（上版 420，净 +24 干净）。
+#        其中板贡献少量真·全球远程 gem（Sticker Mule / TestGorilla 等），
+#        但夹杂空 location 区域锁定噪声，需人工筛。
+#   7. 自动跑源：companies 25 + boards 6（4 启 + 2 禁）= 31；体检 29 live / 0 no-provider。
+#
+# 2026-10-01 v2（本轮：补公司 + 放宽标题 + 修地区漏洞）
+#   1. 【新增】7 家国内 AI 公司（全部实测可爬）：
+#        百川智能 / 零一万物 / 阶跃星辰 / 面壁智能 / 生数科技 / 无问芯穹 / 商汤科技
+#        + 理想汽车（北京总部，智驾）
+#   2. 【放宽】title_filter.positive 增加通用职能词一档
+#        （Engineer/Manager/Architect/Lead/Account Executive/Partner 等），
+#        并同步加 negative 对冲技术岗噪声（前端/后端/iOS/DevOps/SRE…）。
+#   3. 【修复·严重】block_hard 只拦了 "Remote - EMEA"（短横线）形态，
+#        漏掉 Ashby 系的 "Remote, EMEA"（逗号）形态 → Supabase 等
+#        区域锁定远程岗曾经混进管道。已补逗号形态 + 区域缩写（EMEA/APAC/LATAM）。
+#   4. 【修复】block 补 90+ 美国城市/州名 + 非洲/中东地名
+#        （Ashby provider 会把地址折进 location，有些只给城市不给国家，
+#        如 Harvey 的 "Washington DC · Remote"）。
+#   5. 【澄清】Cursor / Harvey / Snowflake 当前可投岗位为 0，
+#        是因为它们的北京/远程岗实际都锁区域或已过期——不是配置写错。
+#        条目保留，用于捕捉后续新增。
+#
+# 回滚方法：备份见 tools/ 目录下 portals.yml.bak-*
+#
+# ── 上一版（2026-10-01 v1，相对原始配置）──────────────────────────
+#   1. 【修复】4 个中文 keyword 触发「page 1 failed，保留已收集岗位」的问题
+#              —— 每条 note 里已标注是哪个 keyword。
+#   2. 【修复】location_filter 此前只放行 "Remote" 子串，
+#              导致 "Remote - US" 这类你投不了的岗位大量进入管道。
+#              新增 block_hard 精确拦截区域锁定远程。
+#   3. 【修复】删除 location_filter.enabled —— 该字段无效
+#              （只有 visa_filter / trust_filter 认 enabled）。
+#   4. 【删除】地平线、小红书（无 provider，永久爬不通）。
+#   5. 【删除】job_boards 里对北京准入零价值的条目（印尼/波兰/瑞士/Telegram/VC 板）。
+#   6. 【新增】7 家公司：MongoDB / Canva / Snowflake（北京岗）
+#              + Supabase / Cursor / Harvey / GitLab（真全球远程）。
+#   7. 【新增】max_posting_age_days: 45、content_filter、country_eligibility_filter。
+#   8. 【精简】search_queries 从 40 条降到 10 条，集中在中国 + 全球远程。
+
+
+# ══════════════════════════════════════════════════════════════════
+# 可选并入区（占位 · 勿删）
+# ──────────────────────────────────────────────────────────────────
+# 以下三块在本"中国搭桥示例"里只保留了中国/全球远程所需的最小可用集，
+# 上游同目录 portals.example.yml（2975 行）有庞大的欧美通用目录。需要覆盖
+# 欧美市场时，把对应条目从 portals.example.yml 复制进上面各块即可。这里仅留占位，
+# 提醒"这些位置可以扩，不是没有"。
+#
+#   [tracked_companies] 欧美大厂原生 ATS 条目：
+#       见 portals.example.yml 的 tracked_companies（Greenhouse/Ashby/Lever/
+#       Workday 等，几百家用 careers_url 自动识别 provider 的写法示例）。
+#       追加位置：本文件上方 tracked_companies 块末尾。
+#
+#   [search_queries] 更多 WebSearch 广撒网查询：
+#       见 portals.example.yml 的 search_queries（各国本地板、垂直板示例）。
+#       追加位置：本文件上方 search_queries 块末尾（记得按准入设 enabled）。
+#
+#   [job_boards] 更多招聘板 / 聚合站：
+#       见 portals.example.yml 的 job_boards（board_api_catalog 等）。
+#       追加位置：本文件上方 job_boards 块末尾。
+#
+# 提示：并入后务必重跑 node validate-portals.mjs --file templates/portals.china.example.yml
+#       与 node verify-portals.mjs 做结构与爬取体检。
+# ══════════════════════════════════════════════════════════════════
+

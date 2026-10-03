@@ -250,3 +250,10 @@ documents/*
 # PII (e.g. cv/jane-doe-master-cv.pdf). #1723
 data/intake-state.json
 data/agent-inbox.md
+
+# Local restore points (user data backups — cv.md, profile.yml, tracker copies).
+# Never commit; the whole directory is machine-local scratch.
+snapshots/
+
+# Ad-hoc probe scripts and scan output from company discovery work (local-only).
+tools/
